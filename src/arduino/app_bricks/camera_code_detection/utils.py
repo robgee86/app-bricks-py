@@ -11,7 +11,7 @@ font_size = 18
 font = ImageFont.load_default(font_size)
 
 
-# TODO: move these drawing functions to app_utils and merge them with the ones in object detection & friends
+# TODO: move this drawing function to app_utils and merge it with the ones in object detection & friends
 def draw_bounding_boxes(frame: Image, detections: list[Detection]) -> Image:
     for detection in detections:
         frame = draw_bounding_box(frame, detection)
@@ -44,6 +44,7 @@ def draw_bounding_boxes(frame: Image, detections: list[Detection]) -> Image:
     return frame
 
 
+# TODO: move this drawing function to app_utils and merge it with the ones in object detection & friends
 def draw_bounding_box(frame: Image, detection: Detection) -> Image:
     """Draws a bounding box and label on an image for a detected QR code or barcode.
 

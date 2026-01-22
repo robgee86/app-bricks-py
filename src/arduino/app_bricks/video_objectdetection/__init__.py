@@ -2,23 +2,27 @@
 #
 # SPDX-License-Identifier: MPL-2.0
 
+import base64
+import io
 import time
 import json
 import inspect
 import threading
 import socket
-import numpy as np
 from typing import Callable
 
 from websockets.sync.client import connect
 from websockets.sync.connection import Connection
 from websockets.exceptions import ConnectionClosedOK, ConnectionClosedError
+from PIL.Image import Image
+from PIL import Image as PILImage
 
 from arduino.app_peripherals.camera import Camera, BaseCamera, WebSocketCamera
 from arduino.app_internal.core import load_brick_compose_file, resolve_address
 from arduino.app_internal.core import EdgeImpulseRunnerFacade
 from arduino.app_utils.image.adjustments import compress_to_jpeg
 from arduino.app_utils import brick, Logger
+from arduino.app_utils.image.image import draw_bounding_boxes
 
 logger = Logger("VideoObjectDetection")
 
@@ -53,16 +57,18 @@ class VideoObjectDetection:
         self._confidence = confidence
         self._debounce_sec = debounce_sec
         self._last_detected: dict[str, float] = {}
+        self._last_bounding_boxes: dict[str, dict] = {}
 
         self._handlers = {}  # Dictionary to hold handlers for different actions
         self._handlers_lock = threading.Lock()
+        self._on_frame_cb = None
 
         self._is_running = threading.Event()
 
         infra = load_brick_compose_file(self.__class__)
         if infra is None or "services" not in infra:
             raise RuntimeError("Infrastructure configuration could not be loaded.")
-        for k, v in infra["services"].items():
+        for k, _ in infra["services"].items():
             self._host = k
             break  # Only one service is expected
 
@@ -96,7 +102,7 @@ class VideoObjectDetection:
             self._handlers[object] = callback
 
     def on_detect_all(self, callback: Callable[[dict], None]):
-        """Register a callback invoked for **every detection event**.
+        """Register a callback invoked for **any detected label**.
 
         This is useful to receive a consolidated dictionary of detections for each frame.
 
@@ -116,6 +122,20 @@ class VideoObjectDetection:
 
         with self._handlers_lock:
             self._handlers[self.ALL_HANDLERS_KEY] = callback
+
+    def on_frame(self, callback: Callable[[Image], None] | None):
+        """Registers a callback function to be called when a new camera frame
+        is processed. The image has bounding boxes drawn.
+
+        The callback function must accept the Image frame.
+        If None is provided, the callback is removed.
+
+        Args:
+            callback (Callable[[Image], None]): A callback that will be called
+                with each processed frame.
+            callback (None): Signals to remove the current callback, if any.
+        """
+        self._on_frame_cb = callback
 
     def start(self):
         """Start the video object detection process."""
@@ -138,6 +158,13 @@ class VideoObjectDetection:
             try:
                 with connect(self._uri) as ws:
                     logger.info("WebSocket connection established")
+
+                    if self._on_frame_cb is not None:
+                        ws.send(json.dumps({
+                            'type': 'toggle-camera-preview',
+                            'enabled': True
+                        }))
+
                     while self._is_running.is_set():
                         try:
                             message = ws.recv()
@@ -200,7 +227,7 @@ class VideoObjectDetection:
                             logger.warning(f"TCP connection lost: {e}. Retrying...")
                             break
                         except Exception as e:
-                            logger.exception(f"Error sending image: {e}")
+                            logger.exception(f"Error capturing/sending image: {e}")
 
             except (ConnectionRefusedError, OSError) as e:
                 logger.debug(f"TCP connection failed: {e}. Retrying in 2 seconds...")
@@ -227,16 +254,25 @@ class VideoObjectDetection:
             # Ignore handling-message-success messages
             return
 
+        elif jmsg.get("type") == "camera-preview":
+            if self._on_frame_cb:
+                try:
+                    img_data: str = jmsg["image"].removeprefix("data:image/jpeg;base64,")
+                    img_bytes = base64.b64decode(img_data)
+                    frame = PILImage.open(io.BytesIO(img_bytes))
+                    self._on_frame(frame)
+                except Exception as e:
+                    logger.error(f"Failed to process image frame: {e}")
+            return
+
         elif jmsg.get("type") == "classification":
             result = jmsg.get("result", {})
             if not isinstance(result, dict):
                 return
 
+            self._last_bounding_boxes = {}  # Reset last bounding boxes
             bounding_boxes = result.get("bounding_boxes", [])
             if bounding_boxes:
-                if len(bounding_boxes) == 0:
-                    return
-
                 # Process each bounding box
                 detections = {}
                 for box in bounding_boxes:
@@ -248,16 +284,22 @@ class VideoObjectDetection:
                     if confidence < self._confidence:
                         continue
 
-                    # Extract bounding box coordinates if needed
+                    # Extract bounding box coordinates
                     xyxy_bbox = (
                         box.get("x", 0),
                         box.get("y", 0),
                         box.get("x", 0) + box.get("width", 0),
                         box.get("y", 0) + box.get("height", 0),
                     )
-
                     detection_details = {"confidence": confidence, "bounding_box_xyxy": xyxy_bbox}
                     detections[detected_object] = detection_details
+                    self._last_bounding_boxes[detected_object] = {
+                        "detection": {
+                            "class_name": detected_object,
+                            "confidence": f"{confidence * 100.0:.2f}",
+                            "bounding_box_xyxy": xyxy_bbox,
+                        }
+                    }
 
                     # Check if the class_id matches any registered handlers
                     self._execute_handler(detection=detected_object, detection_details=detection_details)
@@ -269,6 +311,14 @@ class VideoObjectDetection:
         else:
             # Leave logging for unknown message types for debugging purposes
             logger.warning(f"Unknown message type: {jmsg.get('type')}")
+
+    def _on_frame(self, frame: Image):
+        if self._on_frame_cb:
+            frame = draw_bounding_boxes(frame, self._last_bounding_boxes)
+            try:
+                self._on_frame_cb(frame)
+            except Exception as e:
+                logger.error(f"Failed to run on_frame callback: {e}")
 
     def _execute_handler(self, detection: str, detection_details: dict):
         """Execute the handler for the detected object if it exists.
@@ -285,7 +335,6 @@ class VideoObjectDetection:
                 last_time = self._last_detected.get(detection, 0)
                 if now - last_time >= self._debounce_sec:
                     self._last_detected[detection] = now
-                    logger.debug(f"Detected object: {detection}, invoking handler.")
                     sig_args = inspect.signature(handler).parameters
                     if len(sig_args) == 0:
                         handler()
@@ -312,12 +361,6 @@ class VideoObjectDetection:
                     else:
                         handler(detections)
 
-    def _send_ws_message(self, ws: Connection, message: dict):
-        try:
-            ws.send(json.dumps(message))
-        except Exception as e:
-            logger.error(f"Failed to send message over WebSocket: {e}")
-
     def override_threshold(self, value: float):
         """Override the threshold for object detection model.
 
@@ -332,16 +375,6 @@ class VideoObjectDetection:
             self._override_threshold(ws, value)
 
     def _override_threshold(self, ws: Connection, value: float):
-        """Override the threshold for object detection model.
-
-        Args:
-            ws (ClientConnection): The WebSocket connection to send the message through.
-            value (float): The new value for the threshold.
-
-        Raises:
-            TypeError: If the value is not a number.
-            RuntimeError: If the model information is not available or does not support threshold override.
-        """
         if not value or not isinstance(value, (int, float)):
             raise TypeError("Invalid types for value.")
 

@@ -2,17 +2,20 @@
 #
 # SPDX-License-Identifier: MPL-2.0
 
+import base64
+import io
 import time
 import json
 import inspect
 import threading
 import socket
-import numpy as np
 from typing import Callable
 
 from websockets.sync.client import connect
 from websockets.sync.connection import Connection
 from websockets.exceptions import ConnectionClosedOK, ConnectionClosedError
+from PIL.Image import Image
+from PIL import Image as PILImage
 
 from arduino.app_peripherals.camera import Camera, BaseCamera, WebSocketCamera
 from arduino.app_internal.core import load_brick_compose_file, resolve_address
@@ -38,7 +41,7 @@ class VideoImageClassification:
         Args:
             camera (BaseCamera): The camera instance to use for capturing video. If None, a default camera will be initialized.
             confidence (float): The minimum confidence level for a classification to be considered valid. Default is 0.3.
-            debounce_sec (float): The minimum time in seconds between consecutive detections of the same object
+            debounce_sec (float): The minimum time in seconds between consecutive image classifications
                 to avoid multiple triggers. Default is 0 seconds.
 
         Raises:
@@ -52,13 +55,14 @@ class VideoImageClassification:
 
         self._handlers = {}  # Dictionary to hold handlers for different actions
         self._handlers_lock = threading.Lock()
+        self._on_frame_cb = None
 
         self._is_running = threading.Event()
 
         infra = load_brick_compose_file(self.__class__)
         if infra is None or "services" not in infra:
             raise RuntimeError("Infrastructure configuration could not be loaded.")
-        for k, v in infra["services"].items():
+        for k, _ in infra["services"].items():
             self._host = k
             break  # Only one service is expected
 
@@ -125,6 +129,20 @@ class VideoImageClassification:
                 logger.warning(f"Handler for label '{object}' already exists. Overwriting.")
             self._handlers[object] = callback
 
+    def on_frame(self, callback: Callable[[Image], None] | None):
+        """Registers a callback function to be called when a new camera frame
+        is processed. The image has bounding boxes drawn.
+
+        The callback function must accept the Image frame.
+        If None is provided, the callback is removed.
+
+        Args:
+            callback (Callable[[Image], None]): A callback that will be called
+                with each processed frame.
+            callback (None): Signals to remove the current callback, if any.
+        """
+        self._on_frame_cb = callback
+
     def start(self):
         """Start the classification."""
         self._camera.start()
@@ -146,6 +164,13 @@ class VideoImageClassification:
             try:
                 with connect(self._uri) as ws:
                     logger.info("WebSocket connection established")
+
+                    if self._on_frame_cb is not None:
+                        ws.send(json.dumps({
+                            'type': 'toggle-camera-preview',
+                            'enabled': True
+                        }))
+
                     while self._is_running.is_set():
                         try:
                             message = ws.recv()
@@ -235,6 +260,17 @@ class VideoImageClassification:
             # Ignore handling-message-success messages
             return
 
+        elif jmsg.get("type") == "camera-preview":
+            if self._on_frame_cb:
+                try:
+                    img_data: str = jmsg["image"].removeprefix("data:image/jpeg;base64,")
+                    img_bytes = base64.b64decode(img_data)
+                    frame = PILImage.open(io.BytesIO(img_bytes))
+                    self._on_frame(frame)
+                except Exception as e:
+                    logger.error(f"Failed to process image frame: {e}")
+            return
+
         elif jmsg.get("type") == "classification":
             result = jmsg.get("result", {})
             if not isinstance(result, dict):
@@ -258,6 +294,13 @@ class VideoImageClassification:
             # Leave logging for unknown message types for debugging purposes
             logger.warning(f"Unknown message type: {jmsg.get('type')}")
 
+    def _on_frame(self, frame: Image):
+        if self._on_frame_cb:
+            try:
+                self._on_frame_cb(frame)
+            except Exception as e:
+                logger.error(f"Failed to run on_frame callback: {e}")
+
     def _execute_handler(self, classification: str, classifications: dict | None = None):
         """Execute the handler for the detected object if it exists.
 
@@ -272,7 +315,6 @@ class VideoImageClassification:
                 last_time = self._last_detected.get(classification, 0)
                 if now - last_time >= self._debounce_sec:
                     self._last_detected[classification] = now
-                    logger.debug(f"Classification: {classification}, invoking handler.")
                     if classifications is None:
                         handler()
                     else:
@@ -292,16 +334,6 @@ class VideoImageClassification:
             self._override_threshold(ws, value)
 
     def _override_threshold(self, ws: Connection, value: float):
-        """Override the threshold for image classification model.
-
-        Args:
-            ws (ClientConnection): The WebSocket connection to send the message through.
-            value (float): The new value for the threshold.
-
-        Raises:
-            TypeError: If the value is not a number.
-            RuntimeError: If the model information is not available or does not support threshold override.
-        """
         if not value or not isinstance(value, (int, float)):
             raise TypeError("Invalid types for value.")
 

@@ -3,39 +3,43 @@
 # SPDX-License-Identifier: MPL-2.0
 
 import io
+from enum import Enum
 from PIL import Image, ImageDraw, ImageFont
 from arduino.app_utils import Logger
 
 logger = Logger(__name__)
 
 
-class Shape:
+from enum import Enum
+
+class Shape(str, Enum):
     RECTANGLE = "rectangle"
     CIRCLE = "circle"
 
 
-# Define a mapping of confidence ranges to colors for bounding boxes
+
+# Define a mapping of confidence ranges to colors for bounding boxes (hex and precomputed text color for contrast)
 CONFIDENCE_MAP = {
-    (0, 20): "#FF0976",  # Pink
-    (21, 40): "#FF8131",  # Orange
-    (41, 60): "#FFFC00",  # Yellow
-    (61, 80): "#00DED7",  # Light blue
-    (81, 100): "#1EFF00",  # Green
+    (0, 20):   {"bb": "#FF0976", "text": (255, 255, 255)},   # Pink, white text
+    (21, 40):  {"bb": "#FF8131", "text": (0, 0, 0)},         # Orange, black text
+    (41, 60):  {"bb": "#FFFC00", "text": (0, 0, 0)},         # Yellow, black text
+    (61, 80):  {"bb": "#00DED7", "text": (0, 0, 0)},         # Light blue, black text
+    (81, 100): {"bb": "#1EFF00", "text": (0, 0, 0)},         # Green, black text
 }
 
 FONT_PATH = "/home/app/.fonts/OpenSans.ttf"
 
 
-# Get the color for a given confidence value based on the defined ranges.
+# Get the color dict for a given confidence value based on the defined ranges.
 # If the confidence is outside the defined ranges, it defaults to green.
 def get_box_color(confid):
     for (low, high), color in CONFIDENCE_MAP.items():
         if low <= confid <= high:
             return color
-    return "#1EFF00"  # Default to Green if out of range
+    return ("#1EFF00", (0, 0, 0))  # If out of range, default to green, black text
 
 
-def _read(file_path: str) -> bytes:
+def _read(file_path: str) -> bytes | None:
     """Read an image from a file path and return a PIL Image object."""
     try:
         with open(file_path, "rb") as f:
@@ -57,9 +61,9 @@ def get_image_type(image_bytes: bytes | Image.Image) -> str | None:
             # If the input is already a PIL Image, we can directly get its format
             if image_bytes.format is not None:
                 return image_bytes.format.lower()
-        elif isinstance(image_bytes, bytes):
+        elif isinstance(image_bytes, (bytes, bytearray, memoryview)):
             image = Image.open(io.BytesIO(image_bytes))
-            return image.format.lower()  # Returns 'jpeg', 'png', etc.
+            return image.format.lower() if image.format is not None else None  # Returns 'jpeg', 'png', etc.
         return None
     except Exception as e:
         print(f"Error detecting image type: {e}")
@@ -87,44 +91,44 @@ def get_image_bytes(image: str | Image.Image | bytes) -> bytes | None:
 def draw_bounding_boxes(
     image: Image.Image | bytes,
     detection: dict,
-    draw: ImageDraw.ImageDraw = None,
     shape: Shape = Shape.RECTANGLE,
-) -> Image.Image | None:
+) -> Image.Image:
     """Draw bounding boxes on an image using PIL.
 
     The thickness of the box and font size are scaled based on image size.
 
     Args:
-        image (Image.Image|bytes): The image to draw on, can be a PIL Image or bytes.
-        detection (dict): A dictionary containing detection results with keys 'class_name', 'bounding_box_xyxy', and
-            'confidence'.
-        draw (ImageDraw.ImageDraw, optional): An existing ImageDraw object to use. If None, a new one is created.
+        image (Image.Image | bytes): The image to draw on, can be a PIL Image or bytes.
+        detection (dict): A dictionary containing detection results with keys
+            'class_name', 'bounding_box_xyxy', and 'confidence'.
+        draw (ImageDraw.ImageDraw, optional): An existing ImageDraw object to use.
+            If None, a new one is created.
         shape (Shape, optional): Shape of the bounding box. Defaults to rectangle.
-        itself. Defaults to False.
-    """
-    if isinstance(image, bytes):
-        image_box = Image.open(io.BytesIO(image))
-    else:
-        image_box = image
 
-    if draw is None:
-        draw = ImageDraw.Draw(image_box)
+    Returns:
+        Image.Image: The annotated image with bounding boxes drawn.
+
+    Raises:
+        ValueError: If an unsupported shape is provided.
+    """
+    if isinstance(image, (bytes, bytearray, memoryview)):
+        image = Image.open(io.BytesIO(image))
 
     if not detection or "detection" not in detection:
-        return None
+        return image
 
     if shape not in (Shape.RECTANGLE, Shape.CIRCLE):
-        logger.warning(f"Unsupported shape '{shape}'. Defaulting to rectangle.")
-        shape = Shape.RECTANGLE
+        raise ValueError(f"Unsupported shape '{shape}'.")
+
+    draw = ImageDraw.Draw(image)
 
     detection = detection["detection"]
 
     # Scale font size and box thickness based on image size and number of detections
-    ref_dim = max(image_box.size)
+    max_dim = max(image.size)
     n_detections = max(1, len(detection))
-    # More aggressive scaling for many detections or small images
-    font_size = max(8, int(ref_dim / (28 + n_detections * 3)))
-    box_thickness = max(1, int(ref_dim / 250))
+    font_size = max(8, int(max_dim / (28 + n_detections * 3)))
+    box_thickness = max(1, int(max_dim / 250))
     label_vpad = max(2, int(font_size * 0.4))
     label_hpad = max(4, int(font_size * 0.8))
 
@@ -134,36 +138,18 @@ def draw_bounding_boxes(
         logger.warning(f"Error loading custom font: {e}. Using default font.")
         font = ImageFont.load_default(14)
 
-    for i, obj_det in enumerate(detection):
+    for _, obj_det in enumerate(detection):
         if "class_name" not in obj_det or "bounding_box_xyxy" not in obj_det or "confidence" not in obj_det:
             continue
 
         class_name = obj_det["class_name"]
         box = obj_det["bounding_box_xyxy"]
-        confid = float(obj_det["confidence"])
+        confidence = float(obj_det["confidence"])
+        x1, y1, x2, y2 = map(int, box[:4])
 
-        x1 = int(box[0])
-        y1 = int(box[1])
-        x2 = int(box[2])
-        y2 = int(box[3])
+        box_color, text_color = get_box_color(confidence)
 
-        # Set box color based on confidence
-        box_color = get_box_color(confid)
-
-        # Prepare label text
-        text = f"{class_name.capitalize()} {confid:.1f}%"
-
-        text_box_size = font.getbbox(text)[2:]
-        text_width, text_height = text_box_size[0], text_box_size[1]
-        # Align label above the box
-        label_gap = max(1, int(font_size * 0.15))  # space between box and label
-        y1_text = y1 - text_height - label_vpad * 2 - label_gap
-        if y1_text < 0:
-            y1_text = y1 + label_gap  # fallback: label below the box if it goes out of bounds
-        y2_text = y1_text + text_height + label_vpad * 2
-        x2_text = x1 + text_width + label_hpad * 2
-
-        # Draw bounding box
+        # Draw the bounding box
         if shape == Shape.CIRCLE:
             center_x = int((x1 + x2) / 2)
             center_y = int((y1 + y2) / 2)
@@ -172,32 +158,37 @@ def draw_bounding_boxes(
             draw.ellipse(bounding_box, outline=box_color, width=2)
         else:
             draw.rectangle((x1, y1, x2, y2), outline=box_color, width=box_thickness)
-        # Draw label background (dark gray, semi-transparent) on overlay
-        label_bg_color = (0, 0, 0, 128)
-        overlay = Image.new("RGBA", image_box.size, (0, 0, 0, 0))
-        overlay_draw = ImageDraw.Draw(overlay)
-        overlay_draw.rectangle((x1, y1_text, x2_text, y2_text), fill=label_bg_color, outline=None)
-        image_box = image_box.convert("RGBA")
-        image_box = Image.alpha_composite(image_box, overlay)
-        draw = ImageDraw.Draw(image_box)
-        # Draw label text (same color as box, with padding)
-        draw.text((x1 + label_hpad, y1_text + label_vpad), text, fill=box_color, font=font)
 
-    return image_box
+        # Prepare the label
+        text = f"{class_name.capitalize()} {confidence:.1f}%"
+        left, top, right, bottom = font.getbbox(text)
+        text_width, text_height = right - left, bottom - top
+        label_gap = max(1, int(font_size * 0.15))
+        y1_text = y1 - text_height - label_vpad * 2 - label_gap  # Above the box
+        if y1_text < 0:
+            y1_text = y1 + label_gap  # Below the box if not enough space above
+        y2_text = y1_text + text_height + label_vpad * 2
+        x2_text = x1 + text_width + label_hpad * 2
+
+        # Draw the label background and text
+        draw.rectangle((x1, y1_text, x2_text, y2_text), fill=box_color, outline=None)
+        draw.text((x1 + label_hpad, y1_text + label_vpad), text, fill=text_color, font=font)
+
+    return image
 
 
-def draw_anomaly_markers(image: Image.Image | bytes, detection: dict, draw: ImageDraw.ImageDraw = None) -> Image.Image | None:
+def draw_anomaly_markers(image: Image.Image | bytes, detection: dict, draw: ImageDraw.ImageDraw | None = None) -> Image.Image | None:
     """Draw bounding boxes on an image using PIL.
 
     The thickness of the box and font size are scaled based on image size.
 
     Args:
-        image (Image.Image|bytes): The image to draw on, can be a PIL Image or bytes.
+        image (Image.Image | bytes): The image to draw on, can be a PIL Image or bytes.
         detection (dict): A dictionary containing detection results with keys 'class_name', 'bounding_box_xyxy', and
             'score'.
         draw (ImageDraw.ImageDraw, optional): An existing ImageDraw object to use. If None, a new one is created.
     """
-    if isinstance(image, bytes):
+    if isinstance(image, (bytes, bytearray, memoryview)):
         image_box = Image.open(io.BytesIO(image))
     else:
         image_box = image
