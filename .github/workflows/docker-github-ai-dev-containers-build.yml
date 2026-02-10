@@ -1,4 +1,4 @@
-name: DEV - build & publish Arduino dev-latest containers
+name: DEV - AI CONTAINERS build & publish
 
 on:
   workflow_dispatch:
@@ -23,31 +23,23 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - dockerfile: ./containers/python-apps-base/Dockerfile
-            context: ./containers/python-apps-base
-            image: ghcr.io/${{ github.repository_owner }}/app-bricks/python-apps-base
-            build_python_package: true           
+          - dockerfile: ./containers/ei-models-runner/Dockerfile
+            context: ./containers/ei-models-runner
+            image: ghcr.io/${{ github.repository_owner }}/app-bricks/ei-models-runner
+            build_python_package: false
+          - dockerfile: ./containers/llamacpp-runner/Dockerfile
+            context: ./containers/llamacpp-runner
+            image: ghcr.io/${{ github.repository_owner }}/app-bricks/llamacpp-models-runner
+            build_python_package: false
+          - dockerfile: ./containers/ollama-runner/Dockerfile
+            context: ./containers/ollama-runner
+            image: ghcr.io/${{ github.repository_owner }}/app-bricks/ollama-models-runner
+            build_python_package: false            
       max-parallel: 4
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        if: matrix.build_python_package
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install and build library
-        if: matrix.build_python_package
-        env:
-          PUBLIC_IMAGE_REGISTRY_BASE: ${{ env.DEV_REGISTRY_PATH }}/
-        run: |
-          pip install go-task-bin==${{ env.TASKFILE_VERSION }}
-          task init:ci
-          task build-dev
-          cp ./dist/arduino*.whl ./containers/python-apps-base/
 
       #Add support for more platforms with QEMU
       - name: Set up QEMU
