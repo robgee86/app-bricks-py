@@ -5,6 +5,9 @@ services:
     ports:
       - ${BIND_ADDRESS:-0.0.0.0}:5002:5002
     user: 0:0
+    group_add:
+      - video
+      - render
     healthcheck:
       test: [ "CMD-SHELL", "nc -zv hand-gesture-tracker 5002 || exit 1" ]
       interval: 1s
