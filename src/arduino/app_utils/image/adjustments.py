@@ -151,19 +151,19 @@ def crop(frame: np.ndarray, width: int, height: int, x: Optional[int] = None, y:
         np.ndarray: Cropped frame
     """
     orig_h, orig_w = frame.shape[:2]
-    
+
     # Calculate centered coordinates if not provided
     if x is None:
         x = (orig_w - width) // 2
     if y is None:
         y = (orig_h - height) // 2
-    
+
     # Ensure coordinates are within frame bounds
     x = max(0, min(x, orig_w))
     y = max(0, min(y, orig_h))
     x2 = max(0, min(x + width, orig_w))
     y2 = max(0, min(y + height, orig_h))
-    
+
     return frame[y:y2, x:x2, ...]
 
 
@@ -206,7 +206,7 @@ def crop_to_aspect_ratio(
         # Taller than target, crop height
         new_width = orig_w
         new_height = int(orig_w / aspect_ratio_float)
-    
+
     return crop(frame, new_width, new_height, x, y)
 
 
