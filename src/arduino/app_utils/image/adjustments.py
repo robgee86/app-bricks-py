@@ -134,6 +134,82 @@ def flip_v(frame: np.ndarray) -> np.ndarray:
     return frame[::-1, :, ...]
 
 
+def crop(frame: np.ndarray, width: int, height: int, x: Optional[int] = None, y: Optional[int] = None) -> np.ndarray:
+    """
+    Crop frame to specified region. If x and y are not provided, the crop is centered.
+
+    Args:
+        frame (np.ndarray): Input frame
+        width (int): Width of crop region
+        height (int): Height of crop region
+        x (int, optional): Left coordinate of crop region. If None, centers horizontally.
+            Default: None.
+        y (int, optional): Top coordinate of crop region. If None, centers vertically.
+            Default: None.
+
+    Returns:
+        np.ndarray: Cropped frame
+    """
+    orig_h, orig_w = frame.shape[:2]
+    
+    # Calculate centered coordinates if not provided
+    if x is None:
+        x = (orig_w - width) // 2
+    if y is None:
+        y = (orig_h - height) // 2
+    
+    # Ensure coordinates are within frame bounds
+    x = max(0, min(x, orig_w))
+    y = max(0, min(y, orig_h))
+    x2 = max(0, min(x + width, orig_w))
+    y2 = max(0, min(y + height, orig_h))
+    
+    return frame[y:y2, x:x2, ...]
+
+
+def crop_to_aspect_ratio(
+    frame: np.ndarray,
+    aspect_ratio: Tuple[int, int],
+    x: Optional[int] = None,
+    y: Optional[int] = None,
+) -> np.ndarray:
+    """
+    Crop frame to specified aspect ratio. If x and y are not provided, the crop is
+    centered. The function will crop the minimum amount necessary to achieve the
+    target aspect ratio.
+
+    Args:
+        frame (np.ndarray): Input frame
+        aspect_ratio (tuple): Target aspect ratio as tuple (e.g., (16, 9), (1, 1))
+        x (int, optional): Left coordinate of crop region. If None, centers horizontally.
+            Default: None.
+        y (int, optional): Top coordinate of crop region. If None, centers vertically.
+            Default: None.
+
+    Returns:
+        np.ndarray: Cropped frame with target aspect ratio
+
+    Examples:
+        crop_to_aspect_ratio(frame, (16, 9))  # Crop to 16:9 aspect ratio
+        crop_to_aspect_ratio(frame, (4, 3))  # Crop to 4:3 aspect ratio
+        crop_to_aspect_ratio(frame, (1, 1))  # Crop to square
+    """
+    aspect_ratio_float = aspect_ratio[0] / aspect_ratio[1]
+    orig_h, orig_w = frame.shape[:2]
+    current_aspect = orig_w / orig_h
+    # Determine which dimension to crop
+    if current_aspect > aspect_ratio_float:
+        # Wider than target, crop width
+        new_width = int(orig_h * aspect_ratio_float)
+        new_height = orig_h
+    else:
+        # Taller than target, crop height
+        new_width = orig_w
+        new_height = int(orig_w / aspect_ratio_float)
+    
+    return crop(frame, new_width, new_height, x, y)
+
+
 def adjust(frame: np.ndarray, brightness: float = 0.0, contrast: float = 1.0, saturation: float = 1.0, gamma: float = 1.0) -> np.ndarray:
     """
     Apply image adjustments to a BGR or BGRA frame, preserving channel count
@@ -141,10 +217,10 @@ def adjust(frame: np.ndarray, brightness: float = 0.0, contrast: float = 1.0, sa
 
     Args:
         frame (np.ndarray): Input frame (uint8, uint16, uint32).
-        brightness (float): -1.0 to 1.0 (default: 0.0).
-        contrast (float): 0.0 to N (default: 1.0).
-        saturation (float): 0.0 to N (default: 1.0).
-        gamma (float): > 0 (default: 1.0).
+        brightness (float): -1.0 to 1.0. Default: 0.0.
+        contrast (float): 0.0 to N. Default: 1.0.
+        saturation (float): 0.0 to N. Default: 1.0.
+        gamma (float): > 0. Default: 1.0.
 
     Returns:
         np.ndarray: The adjusted input with same dtype as frame.
@@ -368,7 +444,7 @@ def letterboxed(target_size: Optional[Tuple[int, int]] = None, color: Tuple[int,
         interpolation (int): OpenCV interpolation method. Default: cv2.INTER_LINEAR
 
     Returns:
-        Partial function that takes a frame and returns letterboxed frame
+        Function that takes a frame and returns letterboxed frame
 
     Examples:
         pipe = letterboxed(target_size=(640, 640))
@@ -387,7 +463,7 @@ def resized(target_size: Tuple[int, int], maintain_ratio: bool = False, interpol
         interpolation (int): OpenCV interpolation method. Default: cv2.INTER_LINEAR
 
     Returns:
-        Partial function that takes a frame and returns resized frame
+        Function that takes a frame and returns resized frame
 
     Examples:
         pipe = resized(target_size=(640, 480))
@@ -416,18 +492,66 @@ def flipped_v():
     return PipeableFunction(flip_v)
 
 
+def cropped(width: int, height: int, x: Optional[int] = None, y: Optional[int] = None):
+    """
+    Pipeable crop function - crop frame with pipe operator support.
+    If x and y are not provided, the crop is centered.
+
+    Args:
+        width (int): Width of crop region
+        height (int): Height of crop region
+        x (int, optional): Left coordinate of crop region. If None, centers
+            horizontally. Default: None.
+        y (int, optional): Top coordinate of crop region. If None, centers
+            vertically. Default: None.
+
+    Returns:
+        Function that takes a frame and returns cropped frame
+
+    Examples:
+        pipe = cropped(width=400, height=300)  # Centered crop
+        pipe = cropped(width=400, height=300, x=100, y=100)
+        pipe = letterboxed() | cropped(width=640, height=480)
+    """
+    return PipeableFunction(crop, width=width, height=height, x=x, y=y)
+
+
+def cropped_to_aspect_ratio(aspect_ratio: Tuple[int, int], x: Optional[int] = None, y: Optional[int] = None):
+    """
+    Pipeable crop to aspect ratio function - crop frame to aspect ratio with
+    pipe operator support.
+    If x and y are not provided, the crop is centered.
+
+    Args:
+        aspect_ratio (tuple): Target aspect ratio as tuple (e.g., (16, 9), (4, 3), (1, 1))
+        x (int, optional): Left coordinate of crop region. If None, centers horizontally.
+            Default: None.
+        y (int, optional): Top coordinate of crop region. If None, centers vertically.
+            Default: None.
+
+    Returns:
+        Function that takes a frame and returns cropped frame with target aspect ratio
+
+    Examples:
+        pipe = cropped_to_aspect_ratio((16, 9))  # Crop to 16:9 aspect ratio
+        pipe = cropped_to_aspect_ratio((4, 3))  # Crop to 4:3 aspect ratio
+        pipe = letterboxed() | cropped_to_aspect_ratio((1, 1))  # Square crop
+    """
+    return PipeableFunction(crop_to_aspect_ratio, aspect_ratio=aspect_ratio, x=x, y=y)
+
+
 def adjusted(brightness: float = 0.0, contrast: float = 1.0, saturation: float = 1.0, gamma: float = 1.0):
     """
     Pipeable adjust function - apply image adjustments with pipe operator support.
 
     Args:
-        brightness (float): -1.0 to 1.0 (default: 0.0).
-        contrast (float): 0.0 to N (default: 1.0).
-        saturation (float): 0.0 to N (default: 1.0).
-        gamma (float): > 0 (default: 1.0).
+        brightness (float): -1.0 to 1.0. Default: 0.0.
+        contrast (float): 0.0 to N. Default: 1.0.
+        saturation (float): 0.0 to N. Default: 1.0.
+        gamma (float): > 0. Default: 1.0.
 
     Returns:
-        Partial function that takes a frame and returns adjusted frame
+        Function that takes a frame and returns adjusted frame
 
     Examples:
         pipe = adjusted(brightness=0.1, contrast=1.2)
@@ -458,7 +582,7 @@ def compressed_to_jpeg(quality: int = 80):
         quality (int): JPEG quality (0-100, higher = better quality)
 
     Returns:
-        Partial function that takes a frame and returns compressed JPEG bytes as Numpy array or None
+        Function that takes a frame and returns compressed JPEG bytes as Numpy array or None
 
     Examples:
         pipe = compressed_to_jpeg(quality=95)
@@ -475,7 +599,7 @@ def compressed_to_png(compression_level: int = 6):
         compression_level (int): PNG compression level (0-9, higher = better compression)
 
     Returns:
-        Partial function that takes a frame and returns compressed PNG bytes as Numpy array or None
+        Function that takes a frame and returns compressed PNG bytes as Numpy array or None
 
     Examples:
         pipe = compressed_to_png(compression_level=9)
