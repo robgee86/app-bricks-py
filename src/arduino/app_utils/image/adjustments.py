@@ -9,11 +9,12 @@ from PIL import Image
 
 from arduino.app_utils.image.pipeable import PipeableFunction
 
-# NOTE: we adopt the following conventions for image shapes (H = height, W = width, C = channels) and colors:
-# - When receiving a resolution as argument we expect (W, H) format which is more user-friendly
+# NOTE: we adopt the following conventions for color and image shape arguments:
+# (H = height, W = width, C = channels)
+# - When receiving colors we expect BGR or BGRA formats as a tuple
+# - When receiving a resolution we expect (W, H) format which is more user-friendly
 # - When receiving images we expect (H, W, C) format with C = BGR, BGRA or greyscale
 # - When returning images we use (H, W, C) format with C = BGR, BGRA or greyscale (depending on input)
-# - When receiving colors we expect BGR or BGRA formats as a tuple
 # Keep in mind OpenCV uses (W, H, C) format with C = BGR whereas numpy uses (H, W, C) format with any C.
 # The below functions all support unsigned integer types used by OpenCV (uint8, uint16 and uint32).
 
@@ -148,13 +149,11 @@ def crop(frame: np.ndarray, width: int, height: int, x: Optional[int] = None, y:
     """
     orig_h, orig_w = frame.shape[:2]
 
-    # Calculate centered coordinates if not provided
     if x is None:
         x = (orig_w - width) // 2
     if y is None:
         y = (orig_h - height) // 2
 
-    # Ensure coordinates are within frame bounds
     x = max(0, min(x, orig_w))
     y = max(0, min(y, orig_h))
     x2 = max(0, min(x + width, orig_w))
@@ -195,11 +194,11 @@ def crop_to_aspect_ratio(
     current_aspect = orig_w / orig_h
     # Determine which dimension to crop
     if current_aspect > aspect_ratio_float:
-        # Wider than target, crop width
+        # Crop width
         new_width = int(orig_h * aspect_ratio_float)
         new_height = orig_h
     else:
-        # Taller than target, crop height
+        # Crop height
         new_width = orig_w
         new_height = int(orig_w / aspect_ratio_float)
 
@@ -249,14 +248,11 @@ def rotate(
         elif normalized_angle == 270:
             return cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
 
-    # Use general rotation for arbitrary angles or custom parameters
     orig_h, orig_w = frame.shape[:2]
 
-    # Use image center if not provided
     if center is None:
         center = (orig_w // 2, orig_h // 2)
 
-    # Get rotation matrix
     rotation_matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
 
     if expand:
@@ -274,7 +270,6 @@ def rotate(
     else:
         output_size = (orig_w, orig_h)
 
-    # Apply rotation
     rotated = cv2.warpAffine(
         frame,
         rotation_matrix,
