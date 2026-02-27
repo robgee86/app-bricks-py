@@ -4,7 +4,18 @@
 
 import numpy as np
 import pytest
-from arduino.app_utils.image.adjustments import letterbox, resize, adjust, split_channels, greyscale, flip_h, flip_v, crop, crop_to_aspect_ratio, rotate
+from arduino.app_utils.image.adjustments import (
+    letterbox,
+    resize,
+    adjust,
+    split_channels,
+    greyscale,
+    flip_h,
+    flip_v,
+    crop,
+    crop_to_aspect_ratio,
+    rotate,
+)
 
 
 # FIXTURES
@@ -106,6 +117,7 @@ def frame_any_dtype(request):
 # TESTS
 
 # ADJUST TESTS
+
 
 def test_adjust_dtype_preservation(frame_any_dtype):
     """Tests that the dtype of the frame is preserved."""
@@ -231,6 +243,7 @@ def test_adjust_high_bit_depth_bgra(frame_bgra_uint16, frame_bgra_uint32):
 
 # GREYSCALE TESTS
 
+
 def test_greyscale(frame_bgr_uint8, frame_bgra_uint8, frame_grey_uint8):
     """Tests the standalone greyscale function."""
     # Test on BGR
@@ -315,6 +328,7 @@ def test_high_bit_depth_greyscale_bgra_content(frame_bgra_uint16, frame_bgra_uin
 
 # RESIZE TESTS
 
+
 def test_resize_shape_and_dtype(frame_bgr_uint8, frame_bgra_uint8, frame_grey_uint8):
     """Tests that resize produces the correct shape and preserves dtype."""
     target_w, target_h = 50, 75
@@ -336,6 +350,7 @@ def test_resize_shape_and_dtype(frame_bgr_uint8, frame_bgra_uint8, frame_grey_ui
 
 
 # LETTERBOX TESTS
+
 
 def test_letterbox_wide_image(frame_bgr_wide):
     """Tests letterboxing a wide image (200x100) into a square (200x200)."""
@@ -451,6 +466,7 @@ def test_letterbox_color_tuple_error(frame_bgr_uint8):
 
 # FLIP TESTS
 
+
 def test_flip_h_bgr(frame_bgr_uint8):
     """Test horizontal flip for BGR image."""
     flipped = flip_h(frame_bgr_uint8)
@@ -504,6 +520,7 @@ def test_flip_v_bgra(frame_bgra_uint8):
 
 
 # CROP TESTS
+
 
 def test_crop_centered(frame_bgr_uint8):
     """Test crop with default centered behavior."""
@@ -560,6 +577,7 @@ def test_crop_high_bit_depth(frame_bgr_uint16, frame_bgr_uint32):
 
 # CROP TO ASPECT RATIO TESTS
 
+
 def test_crop_to_aspect_ratio_wider(frame_bgr_wide):
     """Test cropping a wide image (200x100) to 1:1 aspect ratio."""
     # frame_bgr_wide is 200x100, aspect 2:1
@@ -596,7 +614,7 @@ def test_crop_to_aspect_ratio_16_9(frame_bgr_uint8):
     # new_height = 100 / (16/9) = 100 * 9/16 = 56.25 -> 56
     cropped = crop_to_aspect_ratio(frame_bgr_uint8, aspect_ratio=(16, 9))
     assert cropped.shape[1] == 100  # Width unchanged
-    assert cropped.shape[0] == 56   # Height cropped
+    assert cropped.shape[0] == 56  # Height cropped
     assert cropped.shape[2] == 3
 
 
@@ -626,6 +644,7 @@ def test_crop_to_aspect_ratio_bgra(frame_bgra_uint8):
 
 
 # ROTATE TESTS
+
 
 def test_rotate_no_op(frame_bgr_uint8):
     """Test that 0-degree rotation returns unchanged frame."""
