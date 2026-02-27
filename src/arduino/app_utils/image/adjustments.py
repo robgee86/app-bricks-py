@@ -235,12 +235,12 @@ def rotate(
         rotate(frame, -90)  # Rotate 90 degrees clockwise
         rotate(frame, 30, expand=True)  # Rotate 30 degrees and expand to fit
     """
-    if angle == .0:
+    if angle == 0.0:
         return frame
 
     if center is None and not expand:
         normalized_angle = angle % 360
-        
+
         # Check for 90-degree increments
         if normalized_angle == 90:
             return cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
@@ -248,32 +248,32 @@ def rotate(
             return cv2.rotate(frame, cv2.ROTATE_180)
         elif normalized_angle == 270:
             return cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
-    
+
     # Use general rotation for arbitrary angles or custom parameters
     orig_h, orig_w = frame.shape[:2]
-    
+
     # Use image center if not provided
     if center is None:
         center = (orig_w // 2, orig_h // 2)
-    
+
     # Get rotation matrix
     rotation_matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
-    
+
     if expand:
         # Calculate new dimension after rotation
         cos = abs(rotation_matrix[0, 0])
         sin = abs(rotation_matrix[0, 1])
         new_w = int((orig_h * sin) + (orig_w * cos))
         new_h = int((orig_h * cos) + (orig_w * sin))
-        
+
         # Center the rotated image
         rotation_matrix[0, 2] += (new_w / 2) - center[0]
         rotation_matrix[1, 2] += (new_h / 2) - center[1]
-        
+
         output_size = (new_w, new_h)
     else:
         output_size = (orig_w, orig_h)
-    
+
     # Apply rotation
     rotated = cv2.warpAffine(
         frame,
@@ -283,7 +283,7 @@ def rotate(
         borderMode=cv2.BORDER_CONSTANT,
         borderValue=color,
     )
-    
+
     return rotated
 
 
@@ -511,7 +511,11 @@ def pil_to_numpy(image: Image.Image) -> np.ndarray:
 # =============================================================================
 
 
-def letterboxed(target_size: Optional[Tuple[int, int]] = None, color: Tuple[int, int, int] | Tuple[int, int, int, int] = (114, 114, 114), interpolation: int = cv2.INTER_LINEAR):
+def letterboxed(
+    target_size: Optional[Tuple[int, int]] = None,
+    color: Tuple[int, int, int] | Tuple[int, int, int, int] = (114, 114, 114),
+    interpolation: int = cv2.INTER_LINEAR,
+):
     """
     Pipeable letterbox function - apply letterboxing with pipe operator support.
 
