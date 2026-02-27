@@ -340,7 +340,7 @@ def test_letterbox_wide_image(frame_bgr_wide):
     # y_offset = (200 - 100) // 2 = 50
     # x_offset = (200 - 200) // 2 = 0
 
-    letterboxed = letterbox(frame_bgr_wide, (target_w, target_h), color=0)
+    letterboxed = letterbox(frame_bgr_wide, (target_w, target_h), color=(0, 0, 0))
 
     assert letterboxed.shape == (target_h, target_w, 3)
     assert letterboxed.dtype == frame_bgr_wide.dtype
@@ -365,7 +365,7 @@ def test_letterbox_tall_image(frame_bgr_tall):
     # y_offset = (200 - 200) // 2 = 0
     # x_offset = (200 - 100) // 2 = 50
 
-    letterboxed = letterbox(frame_bgr_tall, (target_w, target_h), color=0)
+    letterboxed = letterbox(frame_bgr_tall, (target_w, target_h), color=(0, 0, 0))
 
     assert letterboxed.shape == (target_h, target_w, 3)
     assert letterboxed.dtype == frame_bgr_tall.dtype
@@ -409,7 +409,7 @@ def test_letterbox_bgra(frame_bgra_uint8):
 def test_letterbox_greyscale(frame_grey_uint8):
     """Tests letterboxing on a 2D greyscale image."""
     target_w, target_h = 200, 200
-    letterboxed = letterbox(frame_grey_uint8, (target_w, target_h), color=0)
+    letterboxed = letterbox(frame_grey_uint8, (target_w, target_h), color=(0, 0, 0))
 
     assert letterboxed.shape == (target_h, target_w)
     assert letterboxed.ndim == 2

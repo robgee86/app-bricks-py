@@ -9,10 +9,11 @@ from PIL import Image
 
 from arduino.app_utils.image.pipeable import PipeableFunction
 
-# NOTE: we use the following formats for image shapes (H = height, W = width, C = channels):
+# NOTE: we adopt the following conventions for image shapes (H = height, W = width, C = channels) and colors:
 # - When receiving a resolution as argument we expect (W, H) format which is more user-friendly
 # - When receiving images we expect (H, W, C) format with C = BGR, BGRA or greyscale
 # - When returning images we use (H, W, C) format with C = BGR, BGRA or greyscale (depending on input)
+# - When receiving colors we expect BGR or BGRA formats as a tuple
 # Keep in mind OpenCV uses (W, H, C) format with C = BGR whereas numpy uses (H, W, C) format with any C.
 # The below functions all support unsigned integer types used by OpenCV (uint8, uint16 and uint32).
 
@@ -27,7 +28,7 @@ Frames are expected to be in BGR, BGRA or greyscale format.
 def letterbox(
     frame: np.ndarray,
     target_size: Optional[Tuple[int, int]] = None,
-    color: int | Tuple[int, int, int] = (114, 114, 114),
+    color: Tuple[int, int, int] | Tuple[int, int, int, int] = (114, 114, 114),
     interpolation: int = cv2.INTER_LINEAR,
 ) -> np.ndarray:
     """
@@ -36,8 +37,7 @@ def letterbox(
     Args:
         frame (np.ndarray): Input frame
         target_size (tuple, optional): Target size as (width, height). If None, makes frame square.
-        color (int or tuple, optional): BGR color for padding borders, can be a scalar or a tuple
-        matching the frame's channel count. Default: (114, 114, 114)
+        color (tuple): BGR or BGRA color for padding borders. Default: (114, 114, 114)
         interpolation (int, optional): OpenCV interpolation method. Default: cv2.INTER_LINEAR
 
     Returns:
@@ -64,15 +64,11 @@ def letterbox(
 
     if frame.ndim == 2:
         # Greyscale
-        if hasattr(color, "__len__"):
-            raise ValueError("For greyscale images, color must be a scalar (int), not a tuple or list.")
-        canvas = np.full((target_h, target_w), color, dtype=original_dtype)
+        canvas = np.full((target_h, target_w), color[0], dtype=original_dtype)
     else:
         # Colored (BGR/BGRA)
         channels = frame.shape[2]
-        if isinstance(color, int):
-            color = (color,) * channels
-        elif len(color) != channels:
+        if len(color) != channels:
             raise ValueError(f"color length ({len(color)}) must match frame channels ({channels}).")
         canvas = np.full((target_h, target_w, channels), color, dtype=original_dtype)
 
@@ -208,6 +204,87 @@ def crop_to_aspect_ratio(
         new_height = int(orig_w / aspect_ratio_float)
 
     return crop(frame, new_width, new_height, x, y)
+
+
+def rotate(
+    frame: np.ndarray,
+    angle: float,
+    center: Optional[Tuple[int, int]] = None,
+    expand: bool = False,
+    color: Tuple[int, int, int] | Tuple[int, int, int, int] = (0, 0, 0),
+    interpolation: int = cv2.INTER_LINEAR,
+) -> np.ndarray:
+    """
+    Rotate frame by specified angle.
+
+    Args:
+        frame (np.ndarray): Input frame
+        angle (float): Rotation angle in degrees (positive values rotate counter-clockwise)
+        center (tuple, optional): Center of rotation as (x, y). If None, uses image center.
+            Default: None.
+        expand (bool): If True, expands the output frame to fit the entire rotated image.
+            If False, output frame size matches input. Default: False.
+        color (tuple): BGR or BGRA color for border pixels. Default: (0, 0, 0).
+        interpolation (int): OpenCV interpolation method. Default: cv2.INTER_LINEAR.
+
+    Returns:
+        np.ndarray: Rotated frame
+
+    Examples:
+        rotate(frame, 45)  # Rotate 45 degrees counter-clockwise
+        rotate(frame, -90)  # Rotate 90 degrees clockwise
+        rotate(frame, 30, expand=True)  # Rotate 30 degrees and expand to fit
+    """
+    if angle == .0:
+        return frame
+
+    if center is None and not expand:
+        normalized_angle = angle % 360
+        
+        # Check for 90-degree increments
+        if normalized_angle == 90:
+            return cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        elif normalized_angle == 180:
+            return cv2.rotate(frame, cv2.ROTATE_180)
+        elif normalized_angle == 270:
+            return cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+    
+    # Use general rotation for arbitrary angles or custom parameters
+    orig_h, orig_w = frame.shape[:2]
+    
+    # Use image center if not provided
+    if center is None:
+        center = (orig_w // 2, orig_h // 2)
+    
+    # Get rotation matrix
+    rotation_matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
+    
+    if expand:
+        # Calculate new dimension after rotation
+        cos = abs(rotation_matrix[0, 0])
+        sin = abs(rotation_matrix[0, 1])
+        new_w = int((orig_h * sin) + (orig_w * cos))
+        new_h = int((orig_h * cos) + (orig_w * sin))
+        
+        # Center the rotated image
+        rotation_matrix[0, 2] += (new_w / 2) - center[0]
+        rotation_matrix[1, 2] += (new_h / 2) - center[1]
+        
+        output_size = (new_w, new_h)
+    else:
+        output_size = (orig_w, orig_h)
+    
+    # Apply rotation
+    rotated = cv2.warpAffine(
+        frame,
+        rotation_matrix,
+        output_size,
+        flags=interpolation,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=color,
+    )
+    
+    return rotated
 
 
 def adjust(frame: np.ndarray, brightness: float = 0.0, contrast: float = 1.0, saturation: float = 1.0, gamma: float = 1.0) -> np.ndarray:
@@ -434,13 +511,13 @@ def pil_to_numpy(image: Image.Image) -> np.ndarray:
 # =============================================================================
 
 
-def letterboxed(target_size: Optional[Tuple[int, int]] = None, color: Tuple[int, int, int] = (114, 114, 114), interpolation: int = cv2.INTER_LINEAR):
+def letterboxed(target_size: Optional[Tuple[int, int]] = None, color: Tuple[int, int, int] | Tuple[int, int, int, int] = (114, 114, 114), interpolation: int = cv2.INTER_LINEAR):
     """
     Pipeable letterbox function - apply letterboxing with pipe operator support.
 
     Args:
         target_size (tuple, optional): Target size as (width, height). If None, makes frame square.
-        color (tuple): RGB color for padding borders. Default: (114, 114, 114)
+        color (tuple): BGR or BGRA color for padding borders. Default: (114, 114, 114)
         interpolation (int): OpenCV interpolation method. Default: cv2.INTER_LINEAR
 
     Returns:
@@ -538,6 +615,37 @@ def cropped_to_aspect_ratio(aspect_ratio: Tuple[int, int], x: Optional[int] = No
         pipe = letterboxed() | cropped_to_aspect_ratio((1, 1))  # Square crop
     """
     return PipeableFunction(crop_to_aspect_ratio, aspect_ratio=aspect_ratio, x=x, y=y)
+
+
+def rotated(
+    angle: float,
+    center: Optional[Tuple[int, int]] = None,
+    expand: bool = False,
+    color: Tuple[int, int, int] | Tuple[int, int, int, int] = (0, 0, 0),
+    interpolation: int = cv2.INTER_LINEAR,
+):
+    """
+    Pipeable rotate function - rotate frame with pipe operator support.
+    If center is not provided, rotates around the image center.
+
+    Args:
+        angle (float): Rotation angle in degrees (positive values rotate counter-clockwise)
+        center (tuple, optional): Center of rotation as (x, y). If None, uses image center.
+            Default: None.
+        expand (bool): If True, expands the output frame to fit the entire rotated image.
+            If False, output frame size matches input. Default: False.
+        color (tuple): BGR or BGRA color for border pixels. Default: (0, 0, 0).
+        interpolation (int): OpenCV interpolation method. Default: cv2.INTER_LINEAR.
+
+    Returns:
+        Function that takes a frame and returns rotated frame
+
+    Examples:
+        pipe = rotated(45)  # Rotate 45 degrees counter-clockwise
+        pipe = rotated(-90)  # Rotate 90 degrees clockwise
+        pipe = letterboxed() | rotated(30, expand=True)
+    """
+    return PipeableFunction(rotate, angle=angle, center=center, expand=expand, color=color, interpolation=interpolation)
 
 
 def adjusted(brightness: float = 0.0, contrast: float = 1.0, saturation: float = 1.0, gamma: float = 1.0):
