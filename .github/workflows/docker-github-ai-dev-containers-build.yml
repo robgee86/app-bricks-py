@@ -1,0 +1,6 @@
+name: DEV - AI CONTAINERS build & publish Arduino dev-latest containers
+
+on:
+  workflow_dispatch:
+
+jobs:
