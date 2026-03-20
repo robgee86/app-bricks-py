@@ -13,6 +13,7 @@ env:
   REGISTRY: ghcr.io
   DEV_REGISTRY_PATH: ghcr.io/${{ github.repository_owner }}/
   GH_SOURCE_REPO: https://github.com/${{ github.repository_owner }}/app-bricks-py
+  OPENCV_VERSION: 4.13.0
 
 permissions:
   contents: write
@@ -173,3 +174,5 @@ jobs:
           build-args: |
             REGISTRY=${{ env.DEV_REGISTRY_PATH }}
             BASE_IMAGE_VERSION=dev-next
+            OPENCV_REPO_OWNER=${{ github.repository_owner }}
+            OPENCV_VERSION=${{ env.OPENCV_VERSION }}
