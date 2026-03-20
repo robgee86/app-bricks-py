@@ -87,6 +87,8 @@ jobs:
           provenance: false
           build-args: |
             REGISTRY=${{ env.DEV_REGISTRY_PATH }}
+            OPENCV_REPO_OWNER=${{ github.repository_owner }}
+            OPENCV_VERSION=${{ env.OPENCV_VERSION }}
 
   build:
     needs: build-base
@@ -174,5 +176,3 @@ jobs:
           build-args: |
             REGISTRY=${{ env.DEV_REGISTRY_PATH }}
             BASE_IMAGE_VERSION=dev-next
-            OPENCV_REPO_OWNER=${{ github.repository_owner }}
-            OPENCV_VERSION=${{ env.OPENCV_VERSION }}
