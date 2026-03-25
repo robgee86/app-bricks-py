@@ -113,15 +113,20 @@ class CSICamera(BaseCamera):
    
     def _open_camera(self) -> None:
         """
-        Open the V4L camera connection with retry logic.
+        Open the CSI camera connection with retry logic.
 
         Retries with exponential backoff until successful or self.max_retries is reached.
         """
         self._close_camera()
         camera_name = self.csi_path.replace(" ", r"\ ")  # Escape spaces for GStreamer pipeline
+        width = 1280
+        height = 720
+        if self.resolution and self.resolution[0] and self.resolution[1]:
+            width, height = self.resolution
+
         gstreamer_pipeline = (
             f"libcamerasrc camera-name={camera_name} ! "
-            "video/x-raw,width=1280,height=720 ! "
+            f"video/x-raw,width={width},height={height} ! "
             "videoconvert ! "
             "video/x-raw,format=BGR ! "
             "appsink drop=true max-buffers=1"
