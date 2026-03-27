@@ -14,6 +14,7 @@ from arduino.app_utils import Logger
 
 from .camera import BaseCamera
 from .errors import CameraOpenError, CameraReadError
+from .media_graph import find_sensor_i2c_addr
 
 logger = Logger("CSICamera")
 
@@ -53,7 +54,9 @@ class CSICamera(BaseCamera):
 
         self.codec = codec
 
-        self.csi_path = self._get_camera_path(device)
+        self.media_dev = "/dev/media0"
+
+        self.csi_path = self._get_camera(device)
         
         self.logger = logger
 
@@ -83,8 +86,30 @@ class CSICamera(BaseCamera):
         
         return paths
 
+    def _find_camera_name(self, i2c_addr) -> str:
+        """
+        Find the camera name corresponding to the given I2C address.
+        """
+        output = subprocess.run(
+            ["gst-device-monitor-1.0", "Video/Source"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout
 
-    def _get_camera_path(self, device: Literal["CAMERA0", "CAMERA1"] | int) -> str:
+        for line in output.splitlines():
+            m = re.match(r"^\s+name\s+:\s+(.+)$", line)
+            if m and i2c_addr in m.group(1):
+                return m.group(1).strip()
+
+        raise RuntimeError(f"No camera matches I2C address '{i2c_addr}'")
+
+    def _get_camera_name(self, csiphy_index) -> str:
+        """
+        Get the camera name wired at the given CSIPHY index, managed by the specified media device.
+        """
+        i2c = find_sensor_i2c_addr(self.media_dev, csiphy_index)
+        return self._find_camera_name(i2c)
+
+    def _get_camera(self, device: Literal["CAMERA0", "CAMERA1"] | int) -> str:
         """
         Get the camera path for a given device identifier.
 
@@ -102,13 +127,11 @@ class CSICamera(BaseCamera):
                 index = 0
             elif device.upper() == "CAMERA1":
                 index = 1
-    
-        if index < 0 or index >= len(device_indices):
-            if len(device_indices) > 0:
-                index = 0  # Default to first camera if available
-            else:
-                raise CameraOpenError(f"Camera index {index} out of range. Available: 0-{len(device_indices)-1}")
-        return device_indices[index]
+
+        if index < 0:
+            raise CameraOpenError(f"Camera index {index} out of range. Available: 0-{len(device_indices)-1}")
+
+        return self._get_camera_name(index)
 
    
     def _open_camera(self) -> None:
