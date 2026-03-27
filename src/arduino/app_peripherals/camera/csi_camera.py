@@ -33,7 +33,6 @@ class CSICamera(BaseCamera):
         fps: int = 10,
         adjustments: Optional[Callable[[np.ndarray], np.ndarray]] = None,
         auto_reconnect: bool = True,
-        codec: Literal["", "YUVY", "MJPG", "H264"] = "",
     ):
         """
         Initialize CSI camera.
@@ -47,12 +46,8 @@ class CSICamera(BaseCamera):
             adjustments (callable, optional): Function or function pipeline to adjust frames that takes
                 a numpy array and returns a numpy array. Default: None
             auto_reconnect (bool, optional): Enable automatic reconnection on failure. Default: True.
-            codec (str, optional): Video codec to use (FourCC). Options: "YUVY", "MJPG", "H264".
-                Default: "" (auto).
         """
         super().__init__(resolution, fps, adjustments, auto_reconnect)
-
-        self.codec = codec
 
         self.media_dev = "/dev/media0"
 
@@ -161,17 +156,6 @@ class CSICamera(BaseCamera):
                 raise RuntimeError(f"Failed to open camera {self.name}")
 
             self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Reduce buffer to minimize latency
-
-            if self.codec:
-
-                def fourcc_to_str(fourcc_int):
-                    return "".join([chr((int(fourcc_int) >> 8 * i) & 0xFF) for i in range(4)])
-
-                self._cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*self.codec))
-                fourcc = fourcc_to_str(self._cap.get(cv2.CAP_PROP_FOURCC))
-                if fourcc != self.codec:
-                    logger.warning(f"Camera {self.name} codec set to {fourcc} instead of requested {self.codec}")
-                    self.codec = fourcc
 
             if self.resolution and self.resolution[0] and self.resolution[1]:
                 self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
