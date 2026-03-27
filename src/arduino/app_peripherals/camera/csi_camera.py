@@ -29,7 +29,7 @@ class CSICamera(BaseCamera):
     def __init__(
         self,
         device: Literal["CAMERA0", "CAMERA1"] | int = 0,
-        resolution: tuple[int, int] = (640, 480),
+        resolution: tuple[int, int] = (1280, 720),
         fps: int = 10,
         adjustments: Optional[Callable[[np.ndarray], np.ndarray]] = None,
         auto_reconnect: bool = True,
@@ -137,8 +137,7 @@ class CSICamera(BaseCamera):
         """
         self._close_camera()
         camera_name = self.csi_path.replace(" ", r"\ ")  # Escape spaces for GStreamer pipeline
-        width = 1280
-        height = 720
+        width, height = 1280, 720  # Default resolution if not specified
         if self.resolution and self.resolution[0] and self.resolution[1]:
             width, height = self.resolution
 
@@ -158,9 +157,6 @@ class CSICamera(BaseCamera):
             self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Reduce buffer to minimize latency
 
             if self.resolution and self.resolution[0] and self.resolution[1]:
-                self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
-                self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
-
                 # Verify resolution setting
                 actual_width = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
                 actual_height = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
