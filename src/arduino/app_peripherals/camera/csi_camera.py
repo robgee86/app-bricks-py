@@ -28,7 +28,7 @@ class CSICamera(BaseCamera):
 
     def __init__(
         self,
-        device: Literal["CAMERA0", "CAMERA1"] | int = 0,
+        device: str | int = 0,
         resolution: tuple[int, int] = (1280, 720),
         fps: int = 10,
         adjustments: Optional[Callable[[np.ndarray], np.ndarray]] = None,
@@ -104,7 +104,7 @@ class CSICamera(BaseCamera):
         i2c = find_sensor_i2c_addr(self.media_dev, csiphy_index)
         return self._find_camera_name(i2c)
 
-    def _get_camera(self, device: Literal["CAMERA0", "CAMERA1"] | int) -> str:
+    def _get_camera(self, device: str | int) -> str:
         """
         Get the camera path for a given device identifier.
 
