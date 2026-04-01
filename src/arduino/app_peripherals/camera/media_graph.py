@@ -120,6 +120,7 @@ def scan_sensor_i2c_addresses(media_dev):
     finally:
         os.close(fd)
 
+
 def find_sensor_i2c_addr(media_dev, csiphy_index):
     """
     Traverse the media graph to find CSIPHY a sensor with an immutable link to the provided CSIPHY.
@@ -134,6 +135,7 @@ def find_sensor_i2c_addr(media_dev, csiphy_index):
     except Exception as e:
         raise RuntimeError(f"Error scanning media graph: {e}")
     raise CameraOpenError(f"No sensor found on {csiphy_name}")
+
 
 def resolve_camera_name(i2c_addr) -> str:
         """

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MPL-2.0
 
 import time
-from typing import Literal, Optional
+from typing import Optional
 import cv2
 import numpy as np
 from collections.abc import Callable
@@ -51,7 +51,7 @@ class CSICamera(BaseCamera):
         self.media_dev = "/dev/media0"
 
         self.csi_path = self._get_camera(device)
-        
+
         self.logger = logger
 
         self._cap = None
@@ -75,7 +75,7 @@ class CSICamera(BaseCamera):
 
         except Exception as e:
             logger.error(f"Error listing available cameras: {e}")
-        
+
         return paths
 
     def _get_camera_name(self, csiphy_index) -> str:
@@ -110,7 +110,6 @@ class CSICamera(BaseCamera):
 
         return self._get_camera_name(index)
 
-   
     def _open_camera(self) -> None:
         """
         Open the CSI camera connection with retry logic.
