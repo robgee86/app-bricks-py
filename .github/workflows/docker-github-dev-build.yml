@@ -125,6 +125,7 @@ jobs:
               echo 'break-system-packages = true' >> /etc/pip.conf
               git config --global --add safe.directory '*'
               pip install go-task-bin==${{ env.TASKFILE_VERSION }}
+              curl -sL https://github.com/robgee86/app-bricks-py/releases/download/opencv/4.13.0.92/opencv_python_headless-4.13.0.92-cp313-cp313-linux_aarch64.whl | sha256sum
               pip install https://github.com/robgee86/app-bricks-py/releases/download/opencv/4.13.0.92/opencv_python_headless-4.13.0.92-cp313-cp313-linux_aarch64.whl
               task init:ci
               task build-dev
