@@ -52,6 +52,8 @@ class CSICamera(BaseCamera):
 
         self.csi_path = self._get_camera(device)
 
+        self.name = f"CSI:{self.csi_path}"
+
         self.logger = logger
 
         self._cap = None
