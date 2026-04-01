@@ -29,7 +29,7 @@ class CSICamera(BaseCamera):
         self,
         device: str | int = 0,
         resolution: tuple[int, int] = (1280, 720),
-        fps: int = 10,
+        fps: int = 30,
         adjustments: Optional[Callable[[np.ndarray], np.ndarray]] = None,
         auto_reconnect: bool = True,
     ):
@@ -122,9 +122,11 @@ class CSICamera(BaseCamera):
         if self.resolution and self.resolution[0] and self.resolution[1]:
             width, height = self.resolution
 
+        fps = self.fps if self.fps else 30  # Default to 30 FPS if not specified
+
         gstreamer_pipeline = (
             f"libcamerasrc camera-name={camera_name} ! "
-            f"video/x-raw,width={width},height={height} ! "
+            f"video/x-raw,width={width},height={height},framerate={fps}/1 ! "
             "videoconvert ! "
             "video/x-raw,format=BGR ! "
             "appsink drop=true max-buffers=1"
@@ -149,8 +151,6 @@ class CSICamera(BaseCamera):
                     self.resolution = (actual_width, actual_height)
 
             if self.fps:
-                self._cap.set(cv2.CAP_PROP_FPS, self.fps)
-
                 actual_fps = int(self._cap.get(cv2.CAP_PROP_FPS))
                 if actual_fps != self.fps:
                     logger.warning(f"Camera {self.name} FPS set to {actual_fps} instead of requested {self.fps}")
