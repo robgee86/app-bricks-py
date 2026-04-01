@@ -130,7 +130,7 @@ class Camera:
                 from .csi_camera import CSICamera
 
                 device = source[4:]
-                 # Extract the part after "CSI:"
+                # Extract the part after "CSI:"
                 return CSICamera(device, resolution=resolution, fps=fps, adjustments=adjustments, **kwargs)
             else:
                 raise CameraConfigError(f"Unsupported camera source: {source}")

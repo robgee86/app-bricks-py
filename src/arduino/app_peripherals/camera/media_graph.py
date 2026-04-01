@@ -138,17 +138,19 @@ def find_sensor_i2c_addr(media_dev, csiphy_index):
 
 
 def resolve_camera_name(i2c_addr) -> str:
-        """
-        Find the camera name corresponding to the given I2C address.
-        """
-        output = subprocess.run(
-            ["gst-device-monitor-1.0", "Video/Source"],
-            capture_output=True, text=True, timeout=10,
-        ).stdout
+    """
+    Find the camera name corresponding to the given I2C address.
+    """
+    output = subprocess.run(
+        ["gst-device-monitor-1.0", "Video/Source"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    ).stdout
 
-        for line in output.splitlines():
-            m = re.match(r"^\s+name\s+:\s+(.+)$", line)
-            if m and i2c_addr in m.group(1):
-                return m.group(1).strip()
+    for line in output.splitlines():
+        m = re.match(r"^\s+name\s+:\s+(.+)$", line)
+        if m and i2c_addr in m.group(1):
+            return m.group(1).strip()
 
-        raise CameraOpenError(f"No camera matches I2C address '{i2c_addr}'")
+    raise CameraOpenError(f"No camera matches I2C address '{i2c_addr}'")

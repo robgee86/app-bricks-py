@@ -72,8 +72,8 @@ class CSICamera(BaseCamera):
         try:
             entities = scan_sensor_i2c_addresses("/dev/media0")
             for entity in entities:
-               camera_name = resolve_camera_name(entity[1])
-               paths.append(camera_name)
+                camera_name = resolve_camera_name(entity[1])
+                paths.append(camera_name)
 
         except Exception as e:
             logger.error(f"Error listing available cameras: {e}")
@@ -108,7 +108,7 @@ class CSICamera(BaseCamera):
                 index = 1
 
         if index < 0:
-            raise CameraOpenError(f"Camera index {index} out of range. Available: 0-{len(device_indices)-1}")
+            raise CameraOpenError(f"Camera index {index} out of range. Available: 0-{len(device_indices) - 1}")
 
         return self._get_camera_name(index)
 
