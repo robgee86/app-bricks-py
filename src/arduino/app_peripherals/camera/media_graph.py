@@ -3,7 +3,7 @@ import fcntl
 import os
 import re
 import subprocess
-
+from .errors import CameraOpenError
 
 MEDIA_ENT_ID_FLAG_NEXT = 1 << 31
 MEDIA_ENT_F_CAM_SENSOR = 0x20001
@@ -116,8 +116,6 @@ def scan_sensor_i2c_addresses(media_dev):
                     if m:
                         sensors_found.append((sink["name"], m.group(1)))
 
-        if len(sensors_found) == 0:
-            raise RuntimeError(f"No sensor found on {media_dev}")
         return sensors_found
     finally:
         os.close(fd)
@@ -133,9 +131,9 @@ def find_sensor_i2c_addr(media_dev, csiphy_index):
         for name, i2c_addr in entities:
             if name == csiphy_name:
                 return i2c_addr
-        raise RuntimeError(f"No sensor found on {csiphy_name}")
     except Exception as e:
         raise RuntimeError(f"Error scanning media graph: {e}")
+    raise CameraOpenError(f"No sensor found on {csiphy_name}")
 
 def resolve_camera_name(i2c_addr) -> str:
         """
@@ -151,4 +149,4 @@ def resolve_camera_name(i2c_addr) -> str:
             if m and i2c_addr in m.group(1):
                 return m.group(1).strip()
 
-        raise RuntimeError(f"No camera matches I2C address '{i2c_addr}'")
+        raise CameraOpenError(f"No camera matches I2C address '{i2c_addr}'")

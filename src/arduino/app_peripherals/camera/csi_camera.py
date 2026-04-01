@@ -73,15 +73,10 @@ class CSICamera(BaseCamera):
                camera_name = resolve_camera_name(entity[1])
                paths.append(camera_name)
 
-            if len(paths) == 0:
-                raise RuntimeError("No cameras found.")
-           
         except Exception as e:
             logger.error(f"Error listing available cameras: {e}")
         
         return paths
-
-
 
     def _get_camera_name(self, csiphy_index) -> str:
         """
