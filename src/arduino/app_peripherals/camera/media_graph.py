@@ -2,6 +2,7 @@ import ctypes
 import fcntl
 import os
 import re
+import subprocess
 
 
 MEDIA_ENT_ID_FLAG_NEXT = 1 << 31
@@ -63,12 +64,13 @@ MEDIA_IOC_ENUM_ENTITIES = _iowr("|", 0x01, ctypes.sizeof(MediaEntityDesc))
 MEDIA_IOC_ENUM_LINKS = _iowr("|", 0x02, ctypes.sizeof(MediaLinksEnum))
 
 
-def find_sensor_i2c_addr(media_dev, csiphy_index):
+def scan_sensor_i2c_addresses(media_dev):
     """
-    Traverse the media graph to find CSIPHY a sensor with an immutable link to the provided CSIPHY.
-    Return the I2C address of the found sensor.
+    Scan the media graph to find all sensors and their I2C addresses.
+    Return a list of tuples (sensor_name, i2c_address).
     """
     fd = os.open(media_dev, os.O_RDWR)
+    sensors_found = []
     try:
         # Enumerate all entities
         entities = []
@@ -89,7 +91,6 @@ def find_sensor_i2c_addr(media_dev, csiphy_index):
             desc.id |= MEDIA_ENT_ID_FLAG_NEXT
 
         by_id = {e["id"]: e for e in entities}
-        csiphy_name = f"msm_csiphy{csiphy_index}"
 
         # For each sensor, look for the IMMUTABLE link to its CSIPHY
         for entity in entities:
@@ -110,11 +111,44 @@ def find_sensor_i2c_addr(media_dev, csiphy_index):
                 if not (links[i].flags & MEDIA_LNK_FL_IMMUTABLE):
                     continue
                 sink = by_id.get(links[i].sink.entity)
-                if sink and sink["name"] == csiphy_name:
+                if sink and "msm_csiphy" in sink["name"]:
                     m = re.search(r"(\d+-[\da-fA-F]{4})", entity["name"])
                     if m:
-                        return m.group(1)
+                        sensors_found.append((sink["name"], m.group(1)))
 
-        raise RuntimeError(f"No sensor found on {csiphy_name}")
+        if len(sensors_found) == 0:
+            raise RuntimeError(f"No sensor found on {media_dev}")
+        return sensors_found
     finally:
         os.close(fd)
+
+def find_sensor_i2c_addr(media_dev, csiphy_index):
+    """
+    Traverse the media graph to find CSIPHY a sensor with an immutable link to the provided CSIPHY.
+    Return the I2C address of the found sensor.
+    """
+    csiphy_name = f"msm_csiphy{csiphy_index}"
+    try:
+        entities = scan_sensor_i2c_addresses(media_dev)
+        for name, i2c_addr in entities:
+            if name == csiphy_name:
+                return i2c_addr
+        raise RuntimeError(f"No sensor found on {csiphy_name}")
+    except Exception as e:
+        raise RuntimeError(f"Error scanning media graph: {e}")
+
+def resolve_camera_name(i2c_addr) -> str:
+        """
+        Find the camera name corresponding to the given I2C address.
+        """
+        output = subprocess.run(
+            ["gst-device-monitor-1.0", "Video/Source"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout
+
+        for line in output.splitlines():
+            m = re.match(r"^\s+name\s+:\s+(.+)$", line)
+            if m and i2c_addr in m.group(1):
+                return m.group(1).strip()
+
+        raise RuntimeError(f"No camera matches I2C address '{i2c_addr}'")

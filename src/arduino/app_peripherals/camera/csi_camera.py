@@ -2,8 +2,6 @@
 #
 # SPDX-License-Identifier: MPL-2.0
 
-import re
-import subprocess
 import time
 from typing import Literal, Optional
 import cv2
@@ -14,7 +12,8 @@ from arduino.app_utils import Logger
 
 from .camera import BaseCamera
 from .errors import CameraOpenError, CameraReadError
-from .media_graph import find_sensor_i2c_addr
+from .media_graph import find_sensor_i2c_addr, scan_sensor_i2c_addresses, resolve_camera_name
+
 
 logger = Logger("CSICamera")
 
@@ -69,10 +68,11 @@ class CSICamera(BaseCamera):
         """
         paths: list[str] = []
         try:
-            result = subprocess.run(['cam', '-l'], capture_output=True, text=True, check=True)
+            entities = scan_sensor_i2c_addresses("/dev/media0")
+            for entity in entities:
+               camera_name = resolve_camera_name(entity[1])
+               paths.append(camera_name)
 
-            # Regex to find the string inside the parentheses for each camera
-            paths = re.findall(r"\d+:\s+'.*?'\s+\((.*?)\)", result.stdout)
             if len(paths) == 0:
                 raise RuntimeError("No cameras found.")
            
@@ -81,28 +81,15 @@ class CSICamera(BaseCamera):
         
         return paths
 
-    def _find_camera_name(self, i2c_addr) -> str:
-        """
-        Find the camera name corresponding to the given I2C address.
-        """
-        output = subprocess.run(
-            ["gst-device-monitor-1.0", "Video/Source"],
-            capture_output=True, text=True, timeout=10,
-        ).stdout
 
-        for line in output.splitlines():
-            m = re.match(r"^\s+name\s+:\s+(.+)$", line)
-            if m and i2c_addr in m.group(1):
-                return m.group(1).strip()
-
-        raise RuntimeError(f"No camera matches I2C address '{i2c_addr}'")
 
     def _get_camera_name(self, csiphy_index) -> str:
         """
         Get the camera name wired at the given CSIPHY index, managed by the specified media device.
         """
         i2c = find_sensor_i2c_addr(self.media_dev, csiphy_index)
-        return self._find_camera_name(i2c)
+
+        return resolve_camera_name(i2c)
 
     def _get_camera(self, device: str | int) -> str:
         """
