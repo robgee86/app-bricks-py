@@ -25,7 +25,7 @@ permissions:
 
 jobs:
   detect:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     outputs:
       container: ${{ steps.detect.outputs.container }}
       tag_ref: ${{ steps.detect.outputs.tag_ref }}
@@ -125,7 +125,7 @@ jobs:
           fi
 
   upload-whl:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     needs: [detect]
     if: needs.detect.outputs.no_match == 'false' && needs.detect.outputs.build_whl == 'true'
     env:
@@ -186,7 +186,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     needs: [detect, upload-whl]
     if: |
       always() &&
@@ -276,7 +276,7 @@ jobs:
           draft: true
 
   retag:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     needs: [detect]
     if: needs.detect.outputs.no_match == 'false' && needs.detect.outputs.needs_build == 'false'
     steps:
@@ -334,7 +334,7 @@ jobs:
           draft: true
 
   trigger-downstream:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     needs: [detect, build, retag]
     if: |
       always() &&
