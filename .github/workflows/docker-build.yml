@@ -31,7 +31,7 @@ permissions:
 
 jobs:
   detect-changes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     outputs:
       containers: ${{ steps.detect.outputs.containers }}
       downstream_containers: ${{ steps.detect.outputs.downstream_containers }}
@@ -138,7 +138,7 @@ jobs:
   build:
     needs: [detect-changes]
     if: needs.detect-changes.outputs.containers != '[]'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     env:
       PYTHON_VERSION: "3.13"
       TASKFILE_VERSION: "3.45.4"
@@ -245,7 +245,7 @@ jobs:
   build-downstream:
     needs: [detect-changes, build]
     if: needs.detect-changes.outputs.downstream_containers != '[]'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     env:
       PYTHON_VERSION: "3.13"
       TASKFILE_VERSION: "3.45.4"
