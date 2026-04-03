@@ -71,5 +71,6 @@ jobs:
 
       - name: Run tests
         run: |
-          export PATH="${{ env.TASKFILE_PATH }}:$PATH"
-          task test
+          useradd -m testuser
+          chown -R testuser:testuser .
+          runuser -u testuser -- env PATH="${{ env.TASKFILE_PATH }}:$PATH" task test
