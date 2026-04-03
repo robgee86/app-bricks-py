@@ -9,7 +9,6 @@ import numpy as np
 
 from .base_camera import BaseCamera
 from .errors import CameraConfigError
-from .utils import first_plugged_camera
 
 
 class Camera:
@@ -30,7 +29,7 @@ class Camera:
 
     def __new__(
         cls,
-        source: str | int = first_plugged_camera(),
+        source: str | int = 0,
         resolution: tuple[int, int] = (640, 480),
         fps: int = 10,
         adjustments: Callable[[np.ndarray], np.ndarray] | None = None,
