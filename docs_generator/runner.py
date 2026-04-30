@@ -204,19 +204,15 @@ def process_app_peripherals(src_root: str, output_dir: str):
                 logging.info(f"No public docstrings found in folder: {folder_path}")
 
 
-def run_docs_generator():
-    """Entry point for the documentation generator CLI.
+def run_docs_generator(output_directory: str | os.PathLike):
+    """Generate API documentation under the given output directory.
 
-    Sets up the source and output directories, then generates API and example documentation for all bricks
-    and peripherals.
-    The output directory structure will mirror the source tree under 'docs/'.
-
-    Returns:
-        None
+    The output structure mirrors the source tree (arduino/app_bricks/<brick>/API.md and
+    arduino/app_peripherals/<peripheral>/API.md).
     """
     root_dir = Path(__file__).parent.parent
     source_root = root_dir / "src"
-    output_directory = root_dir / "docs"
+    output_directory = Path(output_directory)
     os.makedirs(output_directory, exist_ok=True)
     logger.info(f"Source root: {source_root}")
     logger.info(f"Output directory: {output_directory}")
@@ -225,5 +221,10 @@ def run_docs_generator():
 
 
 if __name__ == "__main__":
-    run_docs_generator()
+    import sys
+
+    if len(sys.argv) != 2:
+        print("Usage: python -m docs_generator.runner <output_directory>", file=sys.stderr)
+        sys.exit(2)
+    run_docs_generator(sys.argv[1])
     logger.info("Documentation generation completed.")
