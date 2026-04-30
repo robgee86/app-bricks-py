@@ -1,5 +1,4 @@
 {
-  "watch_paths": ["containers/python-base/"],
   "build_whl": false,
   "build_args": {},
   "downstream": ["python-apps-base"]

@@ -1,5 +1,4 @@
 {
-  "watch_paths": ["containers/gesture-recognition-runner/"],
   "build_whl": false,
   "build_args": {},
   "downstream": []

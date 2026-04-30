@@ -1,10 +1,4 @@
 {
-  "watch_paths": [
-    "containers/python-apps-base/",
-    "src/",
-    "pyproject.toml",
-    "Taskfile.dist.yml"
-  ],
   "build_whl": true,
   "build_args": { }
 }

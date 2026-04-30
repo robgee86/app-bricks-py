@@ -1,5 +1,4 @@
 {
-  "watch_paths": ["containers/ei-qnn-models-runner/"],
   "build_whl": false,
   "build_args": {}
 }
