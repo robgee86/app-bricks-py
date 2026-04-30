@@ -1,6 +1,5 @@
 {
   "watch_paths": ["containers/aihub-models-runner/"],
-  "tag_latest": false,
   "build_whl": false,
   "build_args": {},
   "downstream": ["gesture-recognition-runner"]

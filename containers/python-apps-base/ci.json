@@ -5,7 +5,6 @@
     "pyproject.toml",
     "Taskfile.dist.yml"
   ],
-  "tag_latest": false,
   "build_whl": true,
   "build_args": { }
 }

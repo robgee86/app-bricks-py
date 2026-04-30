@@ -1,6 +1,5 @@
 {
   "watch_paths": ["containers/python-base/"],
-  "tag_latest": true,
   "build_whl": false,
   "build_args": {},
   "downstream": ["python-apps-base"]

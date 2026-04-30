@@ -151,7 +151,6 @@ jobs:
         id: config
         run: |
           CI_JSON="containers/${{ matrix.container }}/ci.json"
-          echo "tag_latest=$(jq -r '.tag_latest // false' "$CI_JSON")" >> $GITHUB_OUTPUT
           BUILD_ARGS=$(jq -r '.build_args // {} | to_entries | map("\(.key)=\(.value)") | join("\n")' "$CI_JSON")
           echo "build_args<<EOF" >> $GITHUB_OUTPUT
           echo "$BUILD_ARGS" >> $GITHUB_OUTPUT
@@ -173,7 +172,7 @@ jobs:
         with:
           tags: |
             type=raw,value=${{ needs.detect.outputs.version }}
-            type=raw,value=latest,enable=${{ steps.config.outputs.tag_latest == 'true' && needs.detect.outputs.prerelease == 'false' }}
+            type=raw,value=latest,enable=${{ needs.detect.outputs.prerelease == 'false' }}
           images: ${{ env.GHCR_DESTINATION_ORG }}/app-bricks/${{ matrix.container }}
           labels: |
             org.opencontainers.image.source=${{ env.GH_DESTINATION_REPO }}
@@ -213,7 +212,6 @@ jobs:
         run: |
           CI_JSON="containers/${{ matrix.container }}/ci.json"
           echo "build_whl=$(jq -r '.build_whl // false' "$CI_JSON")" >> $GITHUB_OUTPUT
-          echo "tag_latest=$(jq -r '.tag_latest // false' "$CI_JSON")" >> $GITHUB_OUTPUT
           BUILD_ARGS=$(jq -r '.build_args // {} | to_entries | map("\(.key)=\(.value)") | join("\n")' "$CI_JSON")
           echo "build_args<<EOF" >> $GITHUB_OUTPUT
           echo "$BUILD_ARGS" >> $GITHUB_OUTPUT
@@ -238,11 +236,11 @@ jobs:
 
       - name: Extract Docker metadata
         id: meta
-        uses: docker/metadata-action@v4
+        uses: docker/metadata-action@v5
         with:
           tags: |
             type=raw,value=${{ needs.detect.outputs.version }}
-            type=raw,value=latest,enable=${{ steps.config.outputs.tag_latest == 'true' && needs.detect.outputs.prerelease == 'false' }}
+            type=raw,value=latest,enable=${{ needs.detect.outputs.prerelease == 'false' }}
           images: ${{ env.GHCR_DESTINATION_ORG }}/app-bricks/${{ matrix.container }}
           labels: |
             org.opencontainers.image.source=${{ env.GH_DESTINATION_REPO }}
