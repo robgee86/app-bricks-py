@@ -384,11 +384,6 @@ def save_readme_file(module: ArduinoBrick, output_dir: str):
             f_dest.write(chunk)
 
 
-def save_api_docs_files(output_dir: str):
-    """Save the API docs files to the specified output directory."""
-    shutil.copytree("docs/", output_dir, dirs_exist_ok=True)
-
-
 def save_services_files(services_folder: str, output_dir: str, release_version: str):
     """Save the services files to the specified output directory, substituting the release placeholder."""
     print(f"Saving services files from {services_folder} to {output_dir}...")
@@ -417,33 +412,98 @@ def save_examples_files(module: ArduinoBrick, output_dir: str):
         shutil.copytree(input_folder, output_folder, dirs_exist_ok=True)
 
 
-def library_provisioning(out_path: str = None, modules: Dict[str, List[ArduinoBrick]] = None, services_folder: str = None, buildtime: bool = False):
-    print(f"Provisioning compose files for app execution and bricks documentation. File: {out_path}")
+def library_provisioning(out_path: str = None, modules: Dict[str, List[ArduinoBrick]] = None, services_folder: str = None):
     release_version = os.environ.get("BRICKS_RELEASE_VERSION", "0.0.0")
     print(f"Using release version '{release_version}' for compose placeholder substitution.")
 
     compose_output_dir = f"{out_path}/compose"
     services_output_dir = f"{out_path}/services/arduino"
-    docs_output_dir = f"{out_path}/docs"
-    api_docs_output_dir = f"{out_path}/api-docs"
+    readme_output_dir = f"{out_path}/docs"
     examples_output_dir = f"{out_path}/examples"
     os.makedirs(compose_output_dir, exist_ok=True)
     os.makedirs(services_output_dir, exist_ok=True)
-    os.makedirs(docs_output_dir, exist_ok=True)
-    os.makedirs(api_docs_output_dir, exist_ok=True)
+    os.makedirs(readme_output_dir, exist_ok=True)
     os.makedirs(examples_output_dir, exist_ok=True)
 
     for path, module_list in modules.items():
         for module in module_list:
             save_compose_file(module, compose_output_dir, release_version)
-            save_readme_file(module, docs_output_dir)
+            save_readme_file(module, readme_output_dir)
             save_examples_files(module, examples_output_dir)
 
     save_services_files(services_folder, services_output_dir, release_version)
 
-    if buildtime:
-        print(f"Saving API docs files... buildtime: {buildtime}")
-        save_api_docs_files(api_docs_output_dir)
+
+def release():
+    """
+    Build-time helper: provision the full static directory used by the wheel.
+
+    Populates the static directory with:
+    - api-docs/
+    - compose/
+    - docs/ (brick READMEs)
+    - examples/
+    - services/
+    - bricks-list.yaml
+    - models-list.yaml
+    """
+    parser = argparse.ArgumentParser(description="Provision the AppLab static directory.")
+    parser.add_argument(
+        "-d",
+        "--static-dir",
+        type=str,
+        required=True,
+        help="Target static directory.",
+    )
+    parser.add_argument(
+        "-s",
+        "--models-list-source",
+        type=str,
+        default="models/models-list.yaml",
+        help="Source path for models-list.yaml (default: models/models-list.yaml).",
+    )
+    args = parser.parse_args()
+
+    static_dir = args.static_dir
+    os.makedirs(static_dir, exist_ok=True)
+
+    discovered_modules, services_folder = list_installed_packages_pkg_resources()
+
+    # Write compose/docs/examples/services
+    library_provisioning(static_dir, discovered_modules, services_folder)
+
+    # Write bricks-list.yaml
+    modules = []
+    seen = set()
+    for _, module_list in discovered_modules.items():
+        for module in module_list:
+            if module.id in seen:
+                continue
+            modules.append(module.to_dict())
+            seen.add(module.id)
+    modules.sort(key=lambda m: m["id"])
+    mod_string = yaml.dump({"bricks": modules}, indent=2, default_flow_style=False, sort_keys=False, allow_unicode=True)
+    bricks_list_path = os.path.join(static_dir, "bricks-list.yaml")
+    with open(bricks_list_path, "w") as f:
+        f.write(mod_string)
+    print(f"Wrote {bricks_list_path}")
+
+    # Write models-list.yaml
+    models_dest = os.path.join(static_dir, "models-list.yaml")
+    shutil.copyfile(args.models_list_source, models_dest)
+    print(f"Copied {args.models_list_source} -> {models_dest}")
+
+    # Write api-docs in-process
+    api_docs_dir = os.path.join(static_dir, "api-docs")
+    project_root = os.getcwd()
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+    try:
+        from docs_generator import runner
+    except ImportError:
+        logger.warning(f"docs_generator not importable from {project_root}; skipping API docs generation.")
+        return
+    runner.run_docs_generator(api_docs_dir)
 
 
 def main():
@@ -463,8 +523,6 @@ def main():
         help="Optional models output file path.",
     )
 
-    parser.add_argument("-b", "--buildtime", action="store_true", help="Buildtime execution.")
-
     args = parser.parse_args()
 
     discovered_modules, services_folder = list_installed_packages_pkg_resources()
@@ -482,9 +540,8 @@ def main():
         composeout = args.output
         if args.compose_output is not None and args.compose_output != "":
             composeout = args.compose_output
-        # Provision compose files for app execution and bricks documentation
-        library_provisioning(composeout, discovered_modules, services_folder, args.buildtime)
-        if args.buildtime or len(args.output) > 0:
+        library_provisioning(composeout, discovered_modules, services_folder)
+        if args.output:
             print("Compose provisioning completed.")
             sys.exit(0)
 
