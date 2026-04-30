@@ -161,6 +161,15 @@ jobs:
           ref: ${{ needs.setup.outputs.branch }}
           fetch-depth: 0
 
+      - name: Read container config
+        id: config
+        run: |
+          CI_JSON="containers/${{ matrix.container }}/ci.json"
+          BUILD_ARGS=$(jq -r '.build_args // {} | to_entries | map("\(.key)=\(.value)") | join("\n")' "$CI_JSON")
+          echo "build_args<<EOF" >> $GITHUB_OUTPUT
+          echo "$BUILD_ARGS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
       - name: Setup Docker buildx
         uses: docker/setup-buildx-action@v4
 
@@ -207,6 +216,7 @@ jobs:
           cache-to: ${{ steps.cache.outputs.cache_to }}
           provenance: false
           build-args: |
+            ${{ steps.config.outputs.build_args }}
             REGISTRY=${{ env.DEV_REGISTRY_PATH }}
             BASE_IMAGE_VERSION=${{ needs.setup.outputs.image_tag }}
 
@@ -229,8 +239,18 @@ jobs:
           ref: ${{ needs.setup.outputs.branch }}
           fetch-depth: 0
 
+      - name: Read container config
+        id: config
+        run: |
+          CI_JSON="containers/${{ matrix.container }}/ci.json"
+          echo "build_whl=$(jq -r '.build_whl // false' "$CI_JSON")" >> $GITHUB_OUTPUT
+          BUILD_ARGS=$(jq -r '.build_args // {} | to_entries | map("\(.key)=\(.value)") | join("\n")' "$CI_JSON")
+          echo "build_args<<EOF" >> $GITHUB_OUTPUT
+          echo "$BUILD_ARGS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
       - name: Build wheel in debian:trixie
-        if: matrix.container == 'python-apps-base'
+        if: steps.config.outputs.build_whl == 'true'
         run: |
           docker run --rm \
             -v "${{ github.workspace }}:/${{ github.workspace }}" \
@@ -297,5 +317,6 @@ jobs:
           cache-to: ${{ steps.cache.outputs.cache_to }}
           provenance: false
           build-args: |
+            ${{ steps.config.outputs.build_args }}
             REGISTRY=${{ env.DEV_REGISTRY_PATH }}
             BASE_IMAGE_VERSION=${{ needs.setup.outputs.image_tag }}
