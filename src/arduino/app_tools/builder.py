@@ -11,67 +11,42 @@ from setuptools.build_meta import (
     get_requires_for_build_editable as _orig_get_requires_for_build_editable,
     prepare_metadata_for_build_editable as _orig_prepare_metadata_for_build_editable,
 )
-from setuptools_scm import get_version
 import subprocess
 import shutil
 
 
-def run_preprocessing(dev_mode: bool = False) -> None:
-    registry = os.getenv("PUBLIC_IMAGE_REGISTRY_BASE", None)
-    if dev_mode:
-        version = os.getenv("DEV_TAG_VERSION", "dev-latest")
-    else:
-        version = get_version(
-            version_scheme="only-version", local_scheme="no-local-version", tag_regex=r"^(?:ai|release)/(?P<version>v?\d+(?:\.\d+)*(?:rc\d+)?)$"
-        )
+def run_preprocessing() -> None:
+    version = os.environ.get("BRICKS_RELEASE_VERSION", "0.0.0")
 
     cache_folder_path = "src/arduino/app_bricks/static"
     if os.path.exists(cache_folder_path) and os.path.isdir(cache_folder_path):
         shutil.rmtree(cache_folder_path)
     os.makedirs(cache_folder_path, exist_ok=True)
 
-    try:
-        print(f"################################## Building bricks list Version: {version} - Dev Mode: {dev_mode} ##################################")
-        cmd = ["arduino-bricks-release", "-o", f"{cache_folder_path}/bricks-list.yaml", "--version", f"{version}"]
-        if registry:
-            cmd.append("--registry")
-            cmd.append(registry)
-        if dev_mode:
-            cmd.append("--dev")
+    print(f"################################## Provisioning bricks list and compose files (version: {version}) #################################")
+    cmd = [
+        "arduino-bricks-list-modules",
+        "-o",
+        f"{cache_folder_path}/bricks-list.yaml",
+        "-p",
+        "-b",
+        "-c",
+        cache_folder_path,
+    ]
+    subprocess.run(cmd, check=True, cwd=os.getcwd())
 
-        subprocess.run(cmd, check=True, cwd=os.getcwd())
-    except Exception as e:
-        print(f"Error: {e}.")
-        raise
+    print(f"################################## Embed models list ###############################################################################")
+    shutil.copyfile("models/models-list.yaml", f"{cache_folder_path}/models-list.yaml")
 
-    try:
-        print(f"################################## Pre-provision bricks list #######################################################################")
-        cmd = ["arduino-bricks-list-modules", "-p", "-b", "-c", f"{cache_folder_path}"]
-        subprocess.run(cmd, check=True, cwd=os.getcwd())
-    except Exception as e:
-        print(f"Error: {e}.")
-        raise
-
-    try:
-        print(f"################################## Embed models list ###############################################################################")
-        shutil.copyfile("models/models-list.yaml", f"{cache_folder_path}/models-list.yaml")
-    except Exception as e:
-        print(f"Error: {e}.")
-        raise
-
-    try:
-        print("################################### Docs generation #################################################################################")
-        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
-        print(f"Project root: {project_root}")
-        if project_root not in sys.path:
-            print(f"Adding project root to sys.path: {project_root}")
+    print("################################### Docs generation #################################################################################")
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
+    print(f"Project root: {project_root}")
+    if project_root not in sys.path:
         sys.path.insert(0, project_root)
+    try:
         from docs_generator import runner
 
         runner.run_docs_generator()
-    except Exception as e:
-        print(f"Error while generating docs: {e}.")
-        raise
     finally:
         if project_root in sys.path:
             sys.path.remove(project_root)
@@ -82,10 +57,7 @@ def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
 
 
 def build_sdist(sdist_directory, config_settings=None):
-    dev_mode = False
-    if config_settings and "build_type" in config_settings:
-        dev_mode = config_settings["build_type"] == "dev"
-    run_preprocessing(dev_mode)
+    run_preprocessing()
     return _orig_build_sdist(sdist_directory, config_settings)
 
 
