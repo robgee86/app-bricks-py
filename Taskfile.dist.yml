@@ -52,6 +52,16 @@ tasks:
     cmds:
       - python -m docs_generator.runner
 
+  provision-static:
+    desc: Generate the bricks list and provision compose/docs/examples into the static dir
+    vars:
+      STATIC_DIR: src/arduino/app_bricks/static
+    cmds:
+      - rm -rf {{.STATIC_DIR}}
+      - mkdir -p {{.STATIC_DIR}}
+      - arduino-bricks-list-modules -o {{.STATIC_DIR}}/bricks-list.yaml -p -b -c {{.STATIC_DIR}}
+      - cp models/models-list.yaml {{.STATIC_DIR}}/models-list.yaml
+
   test:
     desc: Run all unit tests
     cmds:
@@ -82,6 +92,7 @@ tasks:
     cmds:
       - rm -rf dist
       - task doc
+      - task provision-static
       - python -m build .
 
   license:headers:
