@@ -13,13 +13,12 @@ import shutil
 import time
 from urllib.parse import urlparse
 from typing import List, Dict, Optional
-from arduino.app_internal.core.module import (
-    _update_compose_release_version_by_platform,
-    EnvVariable,
-)
+from arduino.app_internal.core.module import EnvVariable
 from arduino.app_utils import Logger
 
 logger = Logger(__name__)
+
+RELEASE_VERSION_PLACEHOLDER = "__BRICKS_RELEASE_VERSION__"
 
 editable_module_config = "direct_url.json"
 
@@ -341,8 +340,8 @@ def list_installed_packages_pkg_resources() -> tuple[Dict[str, List[ArduinoBrick
     return checked_paths, services_folder
 
 
-def save_compose_file(module: ArduinoBrick, output_dir: str, appslab_version: str):
-    """Save the compose file to the specified output directory."""
+def save_compose_file(module: ArduinoBrick, output_dir: str, release_version: str):
+    """Save the compose file to the specified output directory, substituting the release placeholder."""
     if not module.require_container:
         return
 
@@ -352,8 +351,6 @@ def save_compose_file(module: ArduinoBrick, output_dir: str, appslab_version: st
     output_folder: pathlib.Path = pathlib.Path(output_dir) / module_name
     output_folder.mkdir(parents=True, exist_ok=True)
 
-    # Search for all brick_compose*.yaml files in the module path and find the one with the latest modification time,
-    # in case there are multiple ones (e.g. brick_compose.yaml and brick_compose.ventunoq.yaml)
     compose_files = list(pathlib.Path(module.path).glob(f"{compose_config_file_name_prefix}*.yaml"))
     if not compose_files:
         logger.warning(f"No compose file found for module {module.id} in path {module.path}")
@@ -361,17 +358,10 @@ def save_compose_file(module: ArduinoBrick, output_dir: str, appslab_version: st
 
     for compose_file in compose_files:
         logger.info(f"Found compose file {compose_file} for module {module.id}")
-
         output_file_name: pathlib.Path = output_folder / compose_file.name
-
-        with open(compose_file, "rb") as f_source, open(output_file_name, "wb") as f_dest:
-            while True:
-                chunk = f_source.read(2048)
-                if not chunk:
-                    break
-                f_dest.write(chunk)
-
-        _update_compose_release_version_by_platform(compose_file_path=output_file_name, release_version=appslab_version)
+        content = compose_file.read_text()
+        content = content.replace(RELEASE_VERSION_PLACEHOLDER, release_version)
+        output_file_name.write_text(content)
 
 
 def save_readme_file(module: ArduinoBrick, output_dir: str):
@@ -399,12 +389,18 @@ def save_api_docs_files(output_dir: str):
     shutil.copytree("docs/", output_dir, dirs_exist_ok=True)
 
 
-def save_services_files(services_folder: str, output_dir: str):
-    """Save the services files to the specified output directory."""
+def save_services_files(services_folder: str, output_dir: str, release_version: str):
+    """Save the services files to the specified output directory, substituting the release placeholder."""
     print(f"Saving services files from {services_folder} to {output_dir}...")
     if not services_folder:
         return
     shutil.copytree(services_folder, output_dir, dirs_exist_ok=True)
+    for compose_file in pathlib.Path(output_dir).rglob(f"{service_compose_config_file_name}*"):
+        if not compose_file.is_file():
+            continue
+        content = compose_file.read_text()
+        if RELEASE_VERSION_PLACEHOLDER in content:
+            compose_file.write_text(content.replace(RELEASE_VERSION_PLACEHOLDER, release_version))
 
 
 def save_examples_files(module: ArduinoBrick, output_dir: str):
@@ -423,11 +419,8 @@ def save_examples_files(module: ArduinoBrick, output_dir: str):
 
 def library_provisioning(out_path: str = None, modules: Dict[str, List[ArduinoBrick]] = None, services_folder: str = None, buildtime: bool = False):
     print(f"Provisioning compose files for app execution and bricks documentation. File: {out_path}")
-    try:
-        from arduino._version import __version__ as arduino_bricks_version
-    except ImportError:
-        logger.error("Error: AppLab version not found. 'appslab._version' module is not available.")
-        sys.exit(1)
+    release_version = os.environ.get("BRICKS_RELEASE_VERSION", "0.0.0")
+    print(f"Using release version '{release_version}' for compose placeholder substitution.")
 
     compose_output_dir = f"{out_path}/compose"
     services_output_dir = f"{out_path}/services/arduino"
@@ -442,130 +435,15 @@ def library_provisioning(out_path: str = None, modules: Dict[str, List[ArduinoBr
 
     for path, module_list in modules.items():
         for module in module_list:
-            save_compose_file(module, compose_output_dir, arduino_bricks_version)
+            save_compose_file(module, compose_output_dir, release_version)
             save_readme_file(module, docs_output_dir)
             save_examples_files(module, examples_output_dir)
 
-    # Save services files
-    save_services_files(services_folder, services_output_dir)
+    save_services_files(services_folder, services_output_dir, release_version)
 
-    # Save API docs files
     if buildtime:
         print(f"Saving API docs files... buildtime: {buildtime}")
         save_api_docs_files(api_docs_output_dir)
-
-
-def release():
-    discovered_modules, services_folder = list_installed_packages_pkg_resources()
-
-    parser = argparse.ArgumentParser(description="Process AppLab modules release.")
-    parser.add_argument(
-        "-o",
-        "--output",
-        type=str,
-        default=None,
-        help="Optional output file path list. If not provided, the output will be printed to the console.",
-    )
-    parser.add_argument("-v", "--version", type=str, default=None, help="Release version.")
-    parser.add_argument("-d", "--dev", action="store_true", help="Development mode.")
-    parser.add_argument("-r", "--registry", type=str, default=None, help="Docker registry override.")
-
-    args = parser.parse_args()
-
-    if args.version is None or args.version == "":
-        logger.error("Error: Release version is required.")
-        sys.exit(1)
-
-    registry = None
-    if args.registry is not None and args.registry != "":
-        registry = args.registry
-
-    arduino_bricks_version = args.version
-    update_ai_containers = False
-    if args.dev is not None and args.dev:
-        arduino_bricks_version = os.getenv("DEV_TAG_VERSION", "dev-latest")
-        logger.warning(f"Development mode enabled. Using '{arduino_bricks_version}' as the version.")
-        update_ai_containers = True
-
-    modules = []
-    for path, module_list in discovered_modules.items():
-        for module in module_list:
-            modules.append(module.to_dict())
-            # Update the compose file with the release version
-            if module.require_container:
-                print(f"Processing compose file {module.compose_file} for arduino bricks version {arduino_bricks_version}")
-                _update_compose_release_version_by_platform(
-                    compose_file_path=module.compose_file,
-                    release_version=arduino_bricks_version,
-                    append_suffix=False,
-                    only_ai_containers=update_ai_containers,
-                    registry=registry,
-                )
-
-    # check if there are services files to update with the new version
-    if services_folder and os.path.isdir(services_folder):
-        print(f"Processing services files in {services_folder} for arduino bricks version {arduino_bricks_version}")
-        for entry in os.scandir(services_folder):
-            print(f"Checking {entry.path} for compose files to update...")
-            if not entry.is_dir():
-                continue
-            for sub_entry in os.scandir(entry.path):
-                if sub_entry.is_file() and sub_entry.name == service_compose_config_file_name:
-                    print(f"Found service compose file {sub_entry.path} | {sub_entry.name}. Updating...")
-                    _update_compose_release_version_by_platform(
-                        compose_file_path=sub_entry.path,
-                        release_version=arduino_bricks_version,
-                        append_suffix=False,
-                        only_ai_containers=update_ai_containers,
-                        registry=registry,
-                    )
-
-    mod_structure = {
-        "bricks": modules,
-    }
-    mod_string = yaml.dump(mod_structure, indent=2, default_flow_style=False, sort_keys=False, allow_unicode=True)
-
-    if args.output and args.output != "":
-        for output_path in args.output.split(","):
-            with open(output_path.strip(), "w") as f:
-                f.write(mod_string)
-    else:
-        print(mod_string)
-
-
-def update_ai_container_references():
-    discovered_modules, services_folder = list_installed_packages_pkg_resources()
-
-    parser = argparse.ArgumentParser(description="Update AI container references.")
-    parser.add_argument("-v", "--version", type=str, default=None, help="Release version.")
-
-    parser.add_argument("-r", "--registry", type=str, default=None, help="Docker registry override.")
-
-    args = parser.parse_args()
-
-    if args.version is None or args.version == "":
-        logger.error("Error: Release version is required.")
-        sys.exit(1)
-
-    registry = None
-    if args.registry is not None and args.registry != "":
-        registry = args.registry
-
-    arduino_bricks_version = args.version
-
-    modules = []
-    for path, module_list in discovered_modules.items():
-        for module in module_list:
-            modules.append(module.to_dict())
-            # Update the compose file with the release version
-            if module.require_container:
-                _update_compose_release_version_by_platform(
-                    compose_file_path=module.compose_file,
-                    release_version=arduino_bricks_version,
-                    append_suffix=False,
-                    only_ai_containers=True,
-                    registry=registry,
-                )
 
 
 def main():
