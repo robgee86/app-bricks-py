@@ -293,5 +293,3 @@ def resolve_address(host: str) -> str:
         return remote_dev
     else:
         return host
-
-

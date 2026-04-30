@@ -105,6 +105,7 @@ all = [
 
 [project.scripts]
 arduino-bricks-list-modules = "arduino.app_tools.module_listing:main"
+arduino-bricks-release = "arduino.app_tools.module_listing:release"
 
 [build-system]
 requires = ["setuptools>=77,<81", "wheel"]

@@ -48,19 +48,17 @@ tasks:
       - pip install -e ".[dev]"
 
   doc:
-    desc: Generate documentation
+    desc: Generate API documentation
     cmds:
-      - python -m docs_generator.runner
+      - python -m docs_generator.runner docs
 
   provision-static:
-    desc: Generate the bricks list and provision compose/docs/examples into the static dir
+    desc: Provision the static assets for the wheel build (bricks list + compose + api-docs + models-list)
     vars:
       STATIC_DIR: src/arduino/app_bricks/static
     cmds:
       - rm -rf {{.STATIC_DIR}}
-      - mkdir -p {{.STATIC_DIR}}
-      - arduino-bricks-list-modules -o {{.STATIC_DIR}}/bricks-list.yaml -p -b -c {{.STATIC_DIR}}
-      - cp models/models-list.yaml {{.STATIC_DIR}}/models-list.yaml
+      - arduino-bricks-release --static-dir {{.STATIC_DIR}}
 
   test:
     desc: Run all unit tests
@@ -88,10 +86,10 @@ tasks:
       - ruff format
   
   build:
-    desc: Build the package. Override the default 0.0.0 version with BRICKS_RELEASE_VERSION.
+    desc: Build the wheel. Override the default 0.0.0 version with BRICKS_RELEASE_VERSION.
     cmds:
+      - defer: rm -rf src/arduino/app_bricks/static
       - rm -rf dist
-      - task doc
       - task provision-static
       - python -m build .
 
