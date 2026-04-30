@@ -5,7 +5,7 @@ backend-path = ["src/arduino/app_tools"]
 
 [project]
 name = "arduino_app_bricks"
-version = "0.0.0"
+dynamic = ["version"]
 authors = [
   { name="Marco Colombo", email="m.colombo@arduino.cc" },
   { name="Roberto Gazia", email="r.gazia@arduino.cc" },

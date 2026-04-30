@@ -173,7 +173,6 @@ cython_debug/
 
 # Build
 src/arduino/app_bricks/static
-_version.py
 TODO.*
 docs/
 
