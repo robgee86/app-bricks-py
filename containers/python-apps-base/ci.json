@@ -1,5 +1,4 @@
 {
-  "tag_prefix": "release",
   "watch_paths": [
     "containers/python-apps-base/",
     "src/",
@@ -8,6 +7,5 @@
   ],
   "tag_latest": false,
   "build_whl": true,
-  "update_compose": false,
   "build_args": { }
 }

@@ -232,14 +232,12 @@ jobs:
       - name: Build wheel in debian:trixie
         if: matrix.container == 'python-apps-base'
         run: |
-          # Remove tags that setuptools_scm can't parse (only ai/* and release/* are valid)
-          git tag -l | grep -v -E '^(ai|release)/' | xargs -r git tag -d
-
           docker run --rm \
             -v "${{ github.workspace }}:/${{ github.workspace }}" \
             -w "${{ github.workspace }}" \
             -e SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" \
             -e PUBLIC_IMAGE_REGISTRY_BASE="${{ env.DEV_REGISTRY_PATH }}/" \
+            -e BRICKS_RELEASE_VERSION="${{ needs.setup.outputs.image_tag }}" \
             debian:trixie bash -c "
               set -e
               apt-get update
@@ -249,7 +247,7 @@ jobs:
               git config --global --add safe.directory '*'
               pip install go-task-bin==${{ env.TASKFILE_VERSION }}
               task init:ci
-              task build-dev
+              task build
               cp ./dist/arduino*.whl ./containers/python-apps-base/
             "
 

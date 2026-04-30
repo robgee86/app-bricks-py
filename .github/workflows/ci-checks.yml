@@ -30,7 +30,6 @@ jobs:
           set -e
           which task || curl -sSfL https://taskfile.dev/install.sh | sh -s -- -b ${{ env.TASKFILE_PATH }} ${{ env.TASKFILE_VERSION }}
           export PATH="${{ env.TASKFILE_PATH }}:$PATH"
-          export SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0
           task init:ci
 
       - name: Check code formatting

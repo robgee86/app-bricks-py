@@ -77,15 +77,8 @@ tasks:
     cmds:
       - ruff format
   
-  build-dev:
-    desc: Build a development package
-    cmds:
-      - rm -rf dist
-      - task doc
-      - python -m build --config-setting "build_type=dev" .
-
   build:
-    desc: Build a production package
+    desc: Build the package. Override the default 0.0.0 version with BRICKS_RELEASE_VERSION.
     cmds:
       - rm -rf dist
       - task doc
@@ -123,7 +116,7 @@ tasks:
         echo "Creating library venv (.licensed-venv)..."
         python3 -m venv .licensed-venv
         .licensed-venv/bin/python -m pip install --upgrade pip -q
-        SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 .licensed-venv/bin/pip install -q ".[all]"
+        .licensed-venv/bin/pip install -q ".[all]"
       - |
         for d in containers/*/; do
           venv_path="$d.licensed-venv"
