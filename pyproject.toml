@@ -35,6 +35,7 @@ dev = [
     "mcp",
     "langchain_mcp_adapters",
     "langchain_ollama",
+    "reuse",
 ]
 dbstorage_influx = [
     "influxdb_client>=1.48.0",
