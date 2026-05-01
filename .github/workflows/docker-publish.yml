@@ -110,7 +110,6 @@ jobs:
             -w "${{ github.workspace }}" \
             -e SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" \
             -e PUBLIC_IMAGE_REGISTRY_BASE="${{ env.GHCR_DESTINATION_ORG }}/" \
-            -e BRICKS_RELEASE_VERSION="${{ needs.detect.outputs.version }}" \
             debian:trixie bash -c "
               set -e
               apt-get update

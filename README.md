@@ -31,7 +31,7 @@ src/arduino/app_bricks/brick_name/
 |---|---|
 | APP_HOME | Base application directory context |
 | LOCAL_DEV | Switch logic for local library development |
-| BRICKS_RELEASE_VERSION | Version stamped in the wheel and in compose file image tags (defaults to `0.0.0`) |
+| BRICKS_RELEASE_VERSION | Override for the compose-file image tag substitution. Normally unset — the version is read from `arduino.version.__version__` instead. |
 
 ## Library development
 To start the development, clone the repository and create a virtual environment.
@@ -128,12 +128,20 @@ To build the wheel:
 task build
 ```
 
-To stamp a specific version:
+The wheel version and the container tags substituted into compose files are both read from `src/arduino/version.py` (`__version__` defaults to `0.0.0`).
+To produce a versioned wheel locally, edit `version.py` to the desired value before running `task build`. CI does the same by sed-replacing `version.py` with the release tag value before the build runs.
+
+If you want to use a specific named version in the compose files, this is typically not supported for wheel versioning but you can still force that named version in the compose files as follows:
+
 ```sh
-BRICKS_RELEASE_VERSION=1.2.3 task build
+BRICKS_RELEASE_VERSION=my-dev-tag task build
 ```
 
-The default version is `0.0.0`. CI stamps the correct version by setting `BRICKS_RELEASE_VERSION` to the release tag value before running `task build`.
+Depending on the contents of `version.py`, this will produce:
+1. A wheel versioned with the version specified by `__version__`;
+2. Compose files with images pointing to `my-dev-tag`.
+
+When no `BRICKS_RELEASE_VERSION` is specified, the compose files will fall back to `__version__`.
 
 ## Release
 

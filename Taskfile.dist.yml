@@ -85,7 +85,7 @@ tasks:
       - uv run ruff format
 
   build:
-    desc: Build the wheel. Override the default 0.0.0 version with BRICKS_RELEASE_VERSION.
+    desc: Build the wheel. Override the default 0.0.0 version by editing version.py.
     cmds:
       - defer: rm -rf src/arduino/app_bricks/static
       - rm -rf dist
