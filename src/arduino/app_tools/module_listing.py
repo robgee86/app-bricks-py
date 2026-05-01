@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 from typing import List, Dict, Optional
 from arduino.app_internal.core.module import EnvVariable
 from arduino.app_utils import Logger
+from arduino.version import __version__ as _installed_version
 
 logger = Logger(__name__)
 
@@ -413,7 +414,7 @@ def save_examples_files(module: ArduinoBrick, output_dir: str):
 
 
 def library_provisioning(out_path: str = None, modules: Dict[str, List[ArduinoBrick]] = None, services_folder: str = None):
-    release_version = os.environ.get("BRICKS_RELEASE_VERSION", "0.0.0")
+    release_version = os.environ.get("BRICKS_RELEASE_VERSION", _installed_version)
     print(f"Using release version '{release_version}' for compose placeholder substitution.")
 
     compose_output_dir = f"{out_path}/compose"
