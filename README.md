@@ -12,59 +12,52 @@ Every Brick must follow this standardized directory structure:
 
 ```
 src/arduino/app_bricks/brick_name/
-├── __init__.py                 # Required: Public API exports
-├── brick_config.yaml          # Required: Brick metadata
-├── brick_compose.yaml         # Optional: Docker services
-├── README.md                  # Required: Documentation
-├── examples/                  # Required: Usage examples
+└── [assets]                      # Optional: Static resources
+├── examples/                     # Required: Usage examples
+├── __init__.py                   # Required: Public API exports
+├── brick_config.yaml             # Required: Brick metadata
+├── brick_compose.yaml            # Optional: Docker infrastructure
+├── brick_compose.<platform>.yaml # Optional: Docker infrastructure for a specific platform
 │   ├── 1_basic_usage.py
 │   ├── 2_advanced_usage.py
 │   └── ...
-├── [implementation_files.py]  # Brick logic
-└── [assets]                   # Static resources
+├── [implementation_files.py]     # Brick logic
+├── README.md                     # Required: Documentation
 ```
 
 ## Configuration variables
 
-| Variable  | Description |
-| ------------- | ------------- |
-| APP_HOME  | Base application directory context  |
-| LOCAL_DEV | To switch logic for local library development |
-| APPSLAB_VERSION | To override the image versions referenced in brick_compose.yaml files |
+| Variable | Description |
+|---|---|
+| APP_HOME | Base application directory context |
+| LOCAL_DEV | Switch logic for local library development |
+| BRICKS_RELEASE_VERSION | Version stamped in the wheel and in compose file image tags (defaults to `0.0.0`) |
 
-## Library compile and build 
-
-To build wheel file suitable for release, use following commands:
-```sh
-pip install build
-python -m build .
-```
-To build package as snapshot for latest development build, use following build command:
-```sh
-pip install build
-python -m build --config-setting "build_type=dev" .
-```
-
-## Library development steps
+## Library development
 To start the development, clone the repository and create a virtual environment.
 
 Install the Taskfile CLI tool: https://taskfile.dev/installation/.
 
-Then, run the following command to set up the development environment:
+Run the following command to set up the development environment:
 
 ```sh
 task init
 ```
 
-This task will check the python version and install the required dependencies.
-
-To force a specific Arduino App Lab container version, use 'APPSLAB_VERSION' environment variable.
+This task will check the Python version and install development dependencies.
 
 ## Linting and formatting
 
-To improve the development experience in VS Code, we recommend adding a `.vscode` folder to the repository root containing the following JSON files:
+You can use the Ruff CLI to safely auto-fix linting issues and format your code by running:
 
-- `extensions.json`
+```sh
+task lint
+task fmt
+```
+
+Alternatively, to improve the development experience in VS Code, you can add a `.vscode` folder to the repository root containing the following JSON files:
+
+`extensions.json`
 
 ```json
 {
@@ -80,7 +73,7 @@ To improve the development experience in VS Code, we recommend adding a `.vscode
 }
 ```
 
-- `settings.json`
+`settings.json`
 
 ```json
 {
@@ -114,16 +107,6 @@ To improve the development experience in VS Code, we recommend adding a `.vscode
 
 After adding those files, VS Code will suggest installing the Python and Ruff extensions, which are properly configured for this project.
 
-Alternatively, you can use the Ruff CLI to safely auto-fix linting issues and format your code by running:
-
-```sh
-task lint
-```
-
-```sh
-task fmt
-```
-
 ## Testing
 
 All tests must be added in tests/ folder. To execute tests, run command:
@@ -136,39 +119,35 @@ or, to execute specific tests, use:
 task test:arduino/app_bricks
 ```
 
-Modules can use LOCAL_DEV=true env variable to set development specific configurations.
+## Building the wheel file
 
-For development purposes, it is possible to change docker registry path using variable:
+Requires a working dev environment (see [Library development](#library-development) below).
+
+To build the wheel:
 ```sh
-DOCKER_REGISTRY_BASE=ghcr.io/arduino/
+task build
 ```
-For containers built as part of this library, 'dev-latest' tag is used to point to latest development container.
-If it is needed to use a different version, override it via 'APPSLAB_VERSION' env variable.
+
+To stamp a specific version:
+```sh
+BRICKS_RELEASE_VERSION=1.2.3 task build
+```
+
+The default version is `0.0.0`. CI stamps the correct version by setting `BRICKS_RELEASE_VERSION` to the release tag value before running `task build`.
 
 ## Release
 
-Release is based on tags pushed to `main`. A single workflow (`docker-github-publish.yml`) handles all container releases and detects which container to build from the tag prefix defined in each container's `ci.json`.
+Release is based on tags pushed to `main`. A single workflow (`docker-publish.yml`) builds **all** containers when a `release/X.Y.Z` tag is pushed. The Python wheel file is uploaded to the GitHub Release.
 
-| Tag | What it releases |
-|---|---|
-| `base/X.Y.Z` | `python-base` base image |
-| `release/X.Y.Z` | `python-apps-base` container + Python `.whl` uploaded to GitHub Release |
-| `ai/X.Y.Z` | `ei-models-runner` AI container |
+**Prerelease**: if the version contains `rc`, `alpha`, or `beta`, images are tagged with the version number only — no `:latest` tag is pushed.
 
-Release cycles for AI containers and Bricks are independent — they use separate tag prefixes and can be released at any time without affecting each other.
-
-After releasing a new version of AI containers, compose files that use AI containers are updated automatically via a generated PR.
-
-**Downstream cascade**: when `python-base` is released, the workflow automatically triggers a rebuild of `python-apps-base` (and any other container declared as a downstream dependency). No manual step required.
-
-For development, the dev build pipeline (`docker-github-build.yml`) rebuilds only the containers whose source files changed on the branch. Dependent containers are built in the correct order — downstream containers wait for their upstream to finish and use the freshly built image.
+For dev builds, use the `docker-build.yml` manual workflow to build specific containers from a branch with a `dev-<branch>` tag.
 
 See [`.github/README.md`](.github/README.md) for full CI documentation.
 
 ### Container layers
 
-Library containers are based on a set of pre-defined Python base images that are updated with a different frequency wrt library release.
-Base images are built by tagging `base/X.Y.Z`. This should be done only when base image dependencies or infrastructure change.
+Library containers are built in layers: `python-base` provides system dependencies and is the foundation for `python-apps-base` (which installs the `.whl`). These layers are rebuilt together on every `release/X.Y.Z` tag but cached aggressively via buildx registry cache, so unchanged layers are reused across releases.
 
 Base images are required to:
 * reduce the amount of updated layers during a single library update
@@ -178,27 +157,15 @@ Base images are required to:
 Non-base images should start from common base images for performance and disk usage needs.
 
 ## License
-See [LICENSE](./LICENSE.txt) file for details.
+This library is licensed under MPL-2.0.
+
+See [LICENSE](./LICENSE.txt) file for the license text.
 
 ## SBOM (Software Bill of Materials)
-Each container includes an SBOM file listing all installed packages, their versions, and licenses:
+Each release includes multiple SBOM files for each container:
 
-- `containers/ei-models-runner/sbom.spdx.json`
-- `containers/python-apps-base/sbom.spdx.json`
+- **base.spdx.json**: lists all installed packages, their versions, and licenses of the base image used for the released container. 
+- **full.spdx.json**: lists all installed packages, their versions, and licenses of the released image.
+- **delta.json**: lists packages added, modified and removed with respect to the base image when building the released image (i.e. difference between full and base images).
 
-Each SBOM file is generated in SPDX format, which is a standard format for SBOMs.
-
-To generate SBOM files, run:
-```sh
-task sbom EI_TAG= BRICKS_TAG=
-```
-where `EI_TAG` and `BRICKS_TAG` represent the versions of the `ei-models-runner` and `python-apps-base` containers, 
-respectively.
-
-Example:
-```sh
-task sbom EI_TAG=1.0.0 BRICKS_TAG=1.0.0
-```
-
-**Note**: To run this task, you need to have Docker installed and running on your machine 
-and the Docker sbom plugin installed.
+The base and full SBOM files are generated in SPDX format, which is a standard format for SBOMs.

@@ -1,4 +1,5 @@
 {
   "build_whl": false,
-  "build_args": {}
+  "build_args": {},
+  "downstream": []
 }
