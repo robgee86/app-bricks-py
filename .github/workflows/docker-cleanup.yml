@@ -31,7 +31,7 @@ jobs:
           echo "tag=dev-$SANITIZED" >> $GITHUB_OUTPUT
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Delete branch-tagged images from GHCR
         env:
@@ -75,7 +75,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Prune untagged container versions
         env:

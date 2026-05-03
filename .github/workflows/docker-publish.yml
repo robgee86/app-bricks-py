@@ -97,7 +97,7 @@ jobs:
       TASKFILE_VERSION: "3.45.4"
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Inject release version
         run: |
@@ -126,7 +126,7 @@ jobs:
             "
 
       - name: Share wheel with downstream jobs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: whl
           path: dist/arduino*.whl
@@ -134,7 +134,7 @@ jobs:
 
   build:
     runs-on: ubuntu-24.04-arm
-    needs: [ detect, upload-whl ]
+    needs: [ detect ]
     env:
       PYTHON_VERSION: "3.13"
       TASKFILE_VERSION: "3.45.4"
@@ -167,7 +167,7 @@ jobs:
 
       - name: Extract Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           tags: |
             type=raw,value=${{ needs.detect.outputs.version }}
@@ -200,7 +200,7 @@ jobs:
           
   build-downstream:
     runs-on: ubuntu-24.04-arm
-    needs: [ detect, build ]
+    needs: [ detect, upload-whl, build ]
     if: needs.detect.outputs.downstream_containers != '[]'
     env:
       PYTHON_VERSION: "3.13"
@@ -242,7 +242,7 @@ jobs:
 
       - name: Extract Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           tags: |
             type=raw,value=${{ needs.detect.outputs.version }}

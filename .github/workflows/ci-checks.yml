@@ -24,7 +24,7 @@ jobs:
           git config --global --add safe.directory '*'
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install dependencies
         run: |
