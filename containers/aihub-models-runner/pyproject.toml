@@ -1,0 +1,9 @@
+[project]
+name = "app-bricks-aihub-models-runner-deps"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "websockets",
+    "flask",
+    "waitress",
+]
