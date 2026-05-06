@@ -14,8 +14,6 @@ tasks:
     desc: Initialize CI environment
     deps:
       - init
-    cmds:
-      - pip install reuse
 
   check:python:version:
     desc: Check if Python version is at least {{.PYTHON_VERSION_MIN}}
@@ -43,52 +41,51 @@ tasks:
       - apt-get install -y --no-install-recommends --no-install-suggests libavcodec-dev libavformat-dev libavutil-dev libswscale-dev
       - apt-get install -y --no-install-recommends --no-install-suggests libjpeg62-turbo-dev libpng-dev libtiff-dev libwebp-dev libopenblas-dev liblapacke-dev
       - apt-get install -y --no-install-recommends --no-install-suggests libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
-      - pip install --no-cache-dir build
-      - pip install --no-cache-dir -e ".[dev]"
+      - uv sync
 
   doc:
     desc: Generate documentation
     cmds:
-      - python -m docs_generator.runner
+      - uv run python -m docs_generator.runner
 
   test:
     desc: Run all unit tests
     cmds:
-      - pytest -vs ./tests --ignore=tests/arduino/app_bricks/cloud_llm/
+      - uv run pytest -vs ./tests --ignore=tests/arduino/app_bricks/cloud_llm/
 
   llm_test:
     desc: Run all LLM tests
     cmds:
-      - deepeval test run tests/arduino/app_bricks/cloud_llm/ -n 4 -vs
+      - uv run deepeval test run tests/arduino/app_bricks/cloud_llm/ -n 4 -vs
 
   test:*:
     desc: Run tests for a specific folder
     cmds:
-      - pytest -vs ./tests/{{index .MATCH 0}}
+      - uv run pytest -vs ./tests/{{index .MATCH 0}}
 
   lint:
     desc: Run linters
     cmds:
-      - ruff check --fix .
+      - uv run ruff check --fix .
 
   fmt:
     desc: Format code
     cmds:
-      - ruff format
+      - uv run ruff format
 
   build-dev:
     desc: Build a development package
     cmds:
       - rm -rf dist
       - task doc
-      - python -m build --config-setting "build_type=dev" .
+      - uv build --config-setting build_type=dev .
 
   build:
     desc: Build a production package
     cmds:
       - rm -rf dist
       - task doc
-      - python -m build .
+      - uv build .
 
   license:headers:
     desc: Update SPDX license headers (REUSE)
@@ -97,8 +94,8 @@ tasks:
         git ls-files |
         grep -Ev "(^|/)(docs|examples-internal|tools)/|\.(md|txt|json|yml|yaml|toml|gitignore|dockerignore|gitmodules|in|ini|eim|lock)$" |
         sed 's/ /\\ /g' |
-        xargs reuse annotate -r --skip-unrecognized --copyright-prefix 'spdx-string-c' --copyright 'ARDUINO SRL (http://www.arduino.cc)' --exclude-year --license 'MPL-2.0'
-      - reuse download --all
+        xargs uv run reuse annotate -r --skip-unrecognized --copyright-prefix 'spdx-string-c' --copyright 'ARDUINO SRL (http://www.arduino.cc)' --exclude-year --license 'MPL-2.0'
+      - uv run reuse download --all
       - |
         licenses_dir="LICENSES"
         if [ -d "$licenses_dir" ]; then
@@ -194,4 +191,4 @@ tasks:
   sbom:delta:
     desc: Generate delta SBOMs for containers (requires syft and registry access)
     cmds:
-      - python3 ./scripts/sbom_delta.py {{.CLI_ARGS}}
+      - uv run python3 ./scripts/sbom_delta.py {{.CLI_ARGS}}
