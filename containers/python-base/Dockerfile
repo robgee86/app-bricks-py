@@ -5,11 +5,13 @@
 
 FROM python:3.13-slim AS builder
 
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
 ARG PYTHON_VERSION=cp313
 ARG OPENCV_REPO_OWNER=arduino
 ARG OPENCV_VERSION=4.13.0.92
 
-COPY ./requirements-base.txt /app/requirements.txt
+COPY ./pyproject.toml ./uv.lock /app/
 
 RUN set -ex; \
     apt-get update -y; \
@@ -18,12 +20,13 @@ RUN set -ex; \
     apt-get install -y --no-install-recommends --no-install-suggests build-essential ca-certificates binutils; \
     # Install dependencies for building ALSA
     apt-get install -y --no-install-recommends --no-install-suggests libasound2-dev libalsaplayer-dev portaudio19-dev libzbar0; \
+    # Export pinned deps from uv.lock to a requirements file
+    cd /app && uv export --frozen --no-emit-project --format requirements-txt > /tmp/req.txt; \
     # Append OpenCV wheel URL (full wheel name with platform details)
-    echo "https://github.com/${OPENCV_REPO_OWNER}/app-bricks-py/releases/download/opencv/${OPENCV_VERSION}/opencv_python_headless-${OPENCV_VERSION}-${PYTHON_VERSION}-${PYTHON_VERSION}-linux_aarch64.whl" >> /app/requirements.txt; \
+    echo "https://github.com/${OPENCV_REPO_OWNER}/app-bricks-py/releases/download/opencv/${OPENCV_VERSION}/opencv_python_headless-${OPENCV_VERSION}-${PYTHON_VERSION}-${PYTHON_VERSION}-linux_aarch64.whl" >> /tmp/req.txt; \
     # Install Python dependencies
-    pip install --no-cache-dir uv; \
-    uv pip install --system --no-cache-dir -r /app/requirements.txt; \
-    rm /app/requirements.txt; \
+    uv pip install --system --no-cache-dir -r /tmp/req.txt; \
+    rm /tmp/req.txt /app/pyproject.toml /app/uv.lock; \
     # Strip debug symbols, tests and remove unneeded packages to reduce size
     find /usr/local/lib/python3.13/site-packages -type f -name "*.so" -exec strip -s {} +; \
     find /usr/local/lib/python3.13/site-packages -type f -name "*.so.*" -exec strip -s {} +; \
