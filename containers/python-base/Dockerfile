@@ -20,13 +20,11 @@ RUN set -ex; \
     apt-get install -y --no-install-recommends --no-install-suggests build-essential ca-certificates binutils; \
     # Install dependencies for building ALSA
     apt-get install -y --no-install-recommends --no-install-suggests libasound2-dev libalsaplayer-dev portaudio19-dev libzbar0; \
-    # Export pinned deps from uv.lock to a requirements file
-    cd /app && uv export --frozen --no-emit-project --format requirements-txt > /tmp/req.txt; \
-    # Append OpenCV wheel URL (full wheel name with platform details)
-    echo "https://github.com/${OPENCV_REPO_OWNER}/app-bricks-py/releases/download/opencv/${OPENCV_VERSION}/opencv_python_headless-${OPENCV_VERSION}-${PYTHON_VERSION}-${PYTHON_VERSION}-linux_aarch64.whl" >> /tmp/req.txt; \
-    # Install Python dependencies
-    uv pip install --system --no-cache-dir -r /tmp/req.txt; \
-    rm /tmp/req.txt /app/pyproject.toml /app/uv.lock; \
+    # Install pinned deps from uv.lock
+    cd /app && uv export --frozen --no-emit-project --format requirements-txt | uv pip install --system --no-cache-dir -r -; \
+    # Install platform-specific OpenCV wheel
+    uv pip install --system --no-cache-dir "https://github.com/${OPENCV_REPO_OWNER}/app-bricks-py/releases/download/opencv/${OPENCV_VERSION}/opencv_python_headless-${OPENCV_VERSION}-${PYTHON_VERSION}-${PYTHON_VERSION}-linux_aarch64.whl"; \
+    rm /app/pyproject.toml /app/uv.lock; \
     # Strip debug symbols, tests and remove unneeded packages to reduce size
     find /usr/local/lib/python3.13/site-packages -type f -name "*.so" -exec strip -s {} +; \
     find /usr/local/lib/python3.13/site-packages -type f -name "*.so.*" -exec strip -s {} +; \

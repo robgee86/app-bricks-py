@@ -28,9 +28,8 @@ RUN apt-get update \
     # Make the venv the default for child images
     uv venv --system-site-packages --seed /opt/venv; \
     # Install Python dependencies into the venv
-    uv export --frozen --no-emit-project --format requirements-txt > /tmp/req.txt; \
-    uv pip install --python /opt/venv/bin/python3 --no-cache-dir -r /tmp/req.txt; \
-    rm /tmp/req.txt pyproject.toml uv.lock; \
+    uv export --frozen --no-emit-project --format requirements-txt | uv pip install --python /opt/venv/bin/python3 --no-cache-dir -r -; \
+    rm pyproject.toml uv.lock; \
     /opt/venv/bin/python3 -m compileall /opt/venv/lib; \
     # Remove unneeded linux firmware
     dpkg -r --force-depends linux-firmware-dragonwing qcom-video-firmware tc9564-firmware firmware-qcm6490-msl firmware-qcom-hlosfw linux-firmware 
