@@ -75,7 +75,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv venv --seed /venvs/arduino-app-bricks && \
     SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 \
     UV_PROJECT_ENVIRONMENT=/venvs/arduino-app-bricks \
-        uv sync --frozen --inexact --no-install-project --no-dev --extra all && \
+        uv sync --frozen --inexact --no-install-project --no-dev && \
     find /venvs/arduino-app-bricks/lib/python*/site-packages -mindepth 1 -maxdepth 1 \
         ! -name '*.dist-info' \
         ! -name 'pip' ! -name 'setuptools' ! -name 'wheel' \
