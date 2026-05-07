@@ -161,6 +161,15 @@ jobs:
           ref: ${{ needs.setup.outputs.branch }}
           fetch-depth: 0
 
+      - name: Read container config
+        id: config
+        run: |
+          CI_JSON="containers/${{ matrix.container }}/ci.json"
+          BUILD_ARGS=$(jq -r '.build_args // {} | to_entries | map("\(.key)=\(.value)") | join("\n")' "$CI_JSON")
+          echo "build_args<<EOF" >> $GITHUB_OUTPUT
+          echo "$BUILD_ARGS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
       - name: Setup Docker buildx
         uses: docker/setup-buildx-action@v4
 
@@ -184,7 +193,7 @@ jobs:
 
       - name: Extract Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           tags: |
             type=raw,value=${{ needs.setup.outputs.image_tag }}
@@ -207,6 +216,7 @@ jobs:
           cache-to: ${{ steps.cache.outputs.cache_to }}
           provenance: false
           build-args: |
+            ${{ steps.config.outputs.build_args }}
             REGISTRY=${{ env.DEV_REGISTRY_PATH }}
             BASE_IMAGE_VERSION=${{ needs.setup.outputs.image_tag }}
 
@@ -236,18 +246,26 @@ jobs:
           ref: ${{ needs.setup.outputs.branch }}
           fetch-depth: 0
 
-      - name: Build wheel in debian:trixie
-        if: matrix.container == 'python-apps-base'
+      - name: Read container config
+        id: config
         run: |
-          # Remove tags that setuptools_scm can't parse (only ai/* and release/* are valid)
-          git tag -l | grep -v -E '^(ai|release)/' | xargs -r git tag -d
+          CI_JSON="containers/${{ matrix.container }}/ci.json"
+          echo "build_whl=$(jq -r '.build_whl // false' "$CI_JSON")" >> $GITHUB_OUTPUT
+          BUILD_ARGS=$(jq -r '.build_args // {} | to_entries | map("\(.key)=\(.value)") | join("\n")' "$CI_JSON")
+          echo "build_args<<EOF" >> $GITHUB_OUTPUT
+          echo "$BUILD_ARGS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
+      - name: Build wheel in debian:trixie
+        if: steps.config.outputs.build_whl == 'true'
+        run: |
           docker run --rm \
             -v "${{ github.workspace }}:/${{ github.workspace }}" \
             -w "${{ github.workspace }}" \
             -e SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" \
             -e PUBLIC_IMAGE_REGISTRY_BASE="${{ env.DEV_REGISTRY_PATH }}/" \
             -e DEV_TAG_VERSION="${{ needs.setup.outputs.image_tag }}" \
+            -e BRICKS_RELEASE_VERSION="${{ needs.setup.outputs.image_tag }}" \
             debian:trixie bash -c "
               set -e
               apt-get update
@@ -256,10 +274,10 @@ jobs:
               echo 'break-system-packages = true' >> /etc/pip.conf
               git config --global --add safe.directory '*'
               pip install uv
-              export PATH="$HOME/.local/bin:$PATH"
+              export PATH=\"/root/.local/bin:\$PATH\"
               uv tool install "go-task-bin==${{ env.TASKFILE_VERSION }}"
               task init:ci
-              task build-dev
+              task build
               cp ./dist/arduino*.whl ./containers/python-apps-base/
             "
 
@@ -286,7 +304,7 @@ jobs:
 
       - name: Extract Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           tags: |
             type=raw,value=${{ needs.setup.outputs.image_tag }}
@@ -309,6 +327,7 @@ jobs:
           cache-to: ${{ steps.cache.outputs.cache_to }}
           provenance: false
           build-args: |
+            ${{ steps.config.outputs.build_args }}
             REGISTRY=${{ env.DEV_REGISTRY_PATH }}
             BASE_IMAGE_VERSION=${{ needs.setup.outputs.image_tag }}
 

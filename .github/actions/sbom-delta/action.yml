@@ -21,7 +21,8 @@ runs:
 
     - name: Install task
       shell: bash
-      run: which task || curl -sSfL https://taskfile.dev/install.sh | sh -s -- -b /usr/local/bin
+      run: |
+        which task || curl -sSfL https://taskfile.dev/install.sh | sh -s -- -b /usr/local/bin
 
     - name: Generate delta SBOM
       shell: bash
@@ -30,10 +31,7 @@ runs:
         VERSION: ${{ inputs.version }}
         REGISTRY: ${{ inputs.registry }}
       run: |
-        task -t Taskfile.dist.yml sbom:delta -- \
-          --version "$VERSION" \
-          --registry "$REGISTRY" \
-          "$CONTAINER"
+        task sbom:delta -- --version "$VERSION" --registry "$REGISTRY" "$CONTAINER"
 
     - name: Upload delta SBOM artifacts
       uses: actions/upload-artifact@v4

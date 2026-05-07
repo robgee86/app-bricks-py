@@ -1,9 +1,5 @@
 {
-  "tag_prefix": "release",
-  "watch_paths": ["containers/python-base/"],
-  "tag_latest": true,
   "build_whl": false,
-  "update_compose": false,
   "build_args": {},
   "sbom": {
     "runtime_base": "python:3.13-slim"

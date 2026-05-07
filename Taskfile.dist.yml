@@ -1,38 +1,13 @@
 version: "3"
 
-vars:
-  PYTHON_VERSION_MIN: "3.13"
-
 tasks:
   init:
-    desc: Setup local env
+    desc: Initialize development environment
     cmds:
-      - task: check:python:version
       - task: install:deps
 
   init:ci:
     desc: Initialize CI environment
-    deps:
-      - init
-
-  check:python:version:
-    desc: Check if Python version is at least {{.PYTHON_VERSION_MIN}}
-    cmds:
-      - |
-        check_version() {
-          python_alias=$1
-          python_version=$($python_alias --version 2>&1 | awk '{print $2}')
-          required_version="{{.PYTHON_VERSION_MIN}}"
-          if [ "$(printf '%s\n' "$required_version" "$python_version" | sort -V | head -n1)" != "$required_version" ]; then
-            echo "$python_alias version must be at least $required_version. Current version: $python_version"
-            exit 1
-          fi
-        }
-
-        check_version python
-
-  install:deps:
-    desc: Install project dependencies
     cmds:
       - apt-get update
       - apt-get install -y --no-install-recommends --no-install-suggests libasound2-dev portaudio19-dev libzbar0
@@ -41,12 +16,25 @@ tasks:
       - apt-get install -y --no-install-recommends --no-install-suggests libavcodec-dev libavformat-dev libavutil-dev libswscale-dev
       - apt-get install -y --no-install-recommends --no-install-suggests libjpeg62-turbo-dev libpng-dev libtiff-dev libwebp-dev libopenblas-dev liblapacke-dev
       - apt-get install -y --no-install-recommends --no-install-suggests libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+      - task: install:deps
+
+  install:deps:
+    desc: Install project dependencies
+    cmds:
       - uv sync
 
   doc:
-    desc: Generate documentation
+    desc: Generate API documentation
     cmds:
-      - uv run python -m docs_generator.runner
+      - uv run python -m docs_generator.runner docs
+
+  provision-static:
+    desc: Provision the static assets for the wheel build (bricks list + compose + api-docs + models-list)
+    vars:
+      STATIC_DIR: src/arduino/app_bricks/static
+    cmds:
+      - rm -rf {{.STATIC_DIR}}
+      - uv run arduino-bricks-release --static-dir {{.STATIC_DIR}}
 
   test:
     desc: Run all unit tests
@@ -73,18 +61,12 @@ tasks:
     cmds:
       - uv run ruff format
 
-  build-dev:
-    desc: Build a development package
-    cmds:
-      - rm -rf dist
-      - task doc
-      - uv build --config-setting build_type=dev .
-
   build:
-    desc: Build a production package
+    desc: Build the wheel. Override the default 0.0.0 version by editing version.py.
     cmds:
+      - defer: rm -rf src/arduino/app_bricks/static
       - rm -rf dist
-      - task doc
+      - task provision-static
       - uv build .
 
   license:headers:
@@ -125,70 +107,7 @@ tasks:
       - task: license:headers
       - task: license:deps
 
-  sbom:generate:internal:
-    internal: true
-    cmds:
-      - |
-        if [ -z "{{.IMAGE}}" ] || [ -z "{{.TAG}}" ] || [ -z "{{.FILENAME}}" ]; then
-          echo "Error: IMAGE, TAG, and FILENAME must be set."
-          exit 1
-        fi
-
-        docker sbom "{{.IMAGE}}:{{.TAG}}" --output "{{.FILENAME}}" --format spdx-json
-
-  sbom:update:internal:
-    internal: true
-    cmds:
-      - task: sbom:generate:internal
-        vars:
-          IMAGE: '{{.IMAGE}}'
-          TAG: '{{.TAG}}'
-          FILENAME: '{{.DIR}}/sbom_new.json'
-      - |
-        NEW_SBOM="{{.DIR}}/sbom_new.json"
-        TMP_FILE="{{.DIR}}/sbom_tmp.json"
-        CURRENT_SBOM="{{.DIR}}/sbom.spdx.json"
-
-        jq --indent 1 --argfile current "$CURRENT_SBOM" '
-          .packages |= map(
-            . as $outer
-            | if $outer.licenseDeclared == "NONE" or $outer.licenseDeclared == "NOASSERTION" then
-                (
-                 [$current.packages[]
-                    | select(.name == $outer.name and .versionInfo == $outer.versionInfo)
-                  ] | first
-                ) as $matched
-                | if $matched != null and $matched.licenseDeclared != null then
-                    $outer 
-                    + {licenseDeclared: $matched.licenseDeclared} 
-                    + (if $matched.comment != null then {comment: $matched.comment} else {} end)
-                  else
-                    $outer
-                  end
-              else
-                $outer
-              end
-          )
-        ' "$NEW_SBOM" > "$TMP_FILE"
-
-        cp "$TMP_FILE" "$CURRENT_SBOM"
-        rm -f "$NEW_SBOM" "$TMP_FILE"
-
-  sbom:
-    desc: "Update SBOM files for python-apps-base and ei-models-runner containers. Parameters: BRICKS_TAG and EI_TAG."
-    cmds:
-      - task: sbom:update:internal
-        vars:
-          IMAGE: 'public.ecr.aws/arduino/app-bricks/python-apps-base'
-          TAG: '{{.BRICKS_TAG}}'
-          DIR: './containers/python-apps-base'
-      - task: sbom:update:internal
-        vars:
-          IMAGE: 'public.ecr.aws/arduino/app-bricks/ei-models-runner'
-          TAG: '{{.EI_TAG}}'
-          DIR: './containers/ei-models-runner'
-
   sbom:delta:
     desc: Generate delta SBOMs for containers (requires syft and registry access)
     cmds:
-      - uv run python3 ./scripts/sbom_delta.py {{.CLI_ARGS}}
+      - python3 ./scripts/sbom_delta.py {{.CLI_ARGS}}

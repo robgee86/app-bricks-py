@@ -5,8 +5,7 @@ run-name: "Release ${{ inputs.tag || github.ref_name }}"
 on:
   push:
     tags:
-      - "release/*"
-      - "ai/*"
+      - 'release/*'
   workflow_dispatch:
     inputs:
       tag:
@@ -23,7 +22,6 @@ permissions:
   contents: write
   packages: write
   id-token: write
-  pull-requests: write
   actions: write
 
 jobs:
@@ -58,29 +56,14 @@ jobs:
             echo "prerelease=false" >> $GITHUB_OUTPUT
           fi
 
-          # Collect all known containers (for downstream existence check)
           ALL_KNOWN=()
           for CI_JSON in containers/*/ci.json; do
             CONTAINER=$(basename "$(dirname "$CI_JSON")")
             ALL_KNOWN+=("$CONTAINER")
           done
 
-          # Filter to containers whose tag_prefix matches the pushed tag prefix
-          TAG_PREFIX_FILTER="${TAG_REF%%/*}"
-          MATCHING_CONTAINERS=()
-          for CONTAINER in "${ALL_KNOWN[@]}"; do
-            CONTAINER_TAG_PREFIX=$(jq -r '.tag_prefix' "containers/$CONTAINER/ci.json" 2>/dev/null)
-            if [[ "$CONTAINER_TAG_PREFIX" == "$TAG_PREFIX_FILTER" ]]; then
-              MATCHING_CONTAINERS+=("$CONTAINER")
-            fi
-          done
-
-          echo "Tag prefix filter: ${TAG_PREFIX_FILTER}"
-          echo "Matching containers: ${MATCHING_CONTAINERS[*]}"
-
-          # Collect downstreams from matching containers (regardless of downstream tag_prefix)
           DOWNSTREAM_IN_BUILD=()
-          for CONTAINER in "${MATCHING_CONTAINERS[@]}"; do
+          for CONTAINER in "${ALL_KNOWN[@]}"; do
             DS_LIST=$(jq -r '.downstream // [] | .[]' "containers/$CONTAINER/ci.json" 2>/dev/null)
             for DS in $DS_LIST; do
               if [[ " ${ALL_KNOWN[*]} " =~ " $DS " ]] && [[ ! " ${DOWNSTREAM_IN_BUILD[*]} " =~ " $DS " ]]; then
@@ -90,7 +73,7 @@ jobs:
           done
 
           BASE_CONTAINERS=()
-          for CONTAINER in "${MATCHING_CONTAINERS[@]}"; do
+          for CONTAINER in "${ALL_KNOWN[@]}"; do
             if [[ ! " ${DOWNSTREAM_IN_BUILD[*]} " =~ " $CONTAINER " ]]; then
               BASE_CONTAINERS+=("$CONTAINER")
             fi
@@ -114,21 +97,19 @@ jobs:
       TASKFILE_VERSION: "3.45.4"
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
+
+      - name: Inject release version
+        run: |
+          sed -i "s|__version__: str = \"0.0.0\"|__version__: str = \"${{ needs.detect.outputs.version }}\"|" src/arduino/version.py
 
       - name: Build wheel in debian:trixie
         run: |
-          # Remove tags that setuptools_scm can't parse (only ai/* and release/* are valid)
-          git tag -l | grep -v -E '^(ai|release)/' | xargs -r git tag -d
-
-          # Explicitly set the version so setuptools_scm does not need the git tag to exist
-          # (handles workflow_dispatch runs where no tag has been pushed yet)
           docker run --rm \
             -v "${{ github.workspace }}:/${{ github.workspace }}" \
             -w "${{ github.workspace }}" \
             -e SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" \
             -e PUBLIC_IMAGE_REGISTRY_BASE="${{ env.GHCR_DESTINATION_ORG }}/" \
-            -e SETUPTOOLS_SCM_PRETEND_VERSION="${{ needs.detect.outputs.version }}" \
             debian:trixie bash -c "
               set -e
               apt-get update
@@ -137,15 +118,14 @@ jobs:
               echo 'break-system-packages = true' >> /etc/pip.conf
               git config --global --add safe.directory '*'
               pip install uv
-              export PATH="$HOME/.local/bin:$PATH"
+              export PATH=\"/root/.local/bin:\$PATH\"
               uv tool install "go-task-bin==${{ env.TASKFILE_VERSION }}"
-              uv pip install --system https://github.com/${{ github.repository }}/releases/download/opencv/4.13.0.92/opencv_python_headless-4.13.0.92-cp313-cp313-linux_aarch64.whl
               task init:ci
               task build
             "
 
       - name: Share wheel with downstream jobs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: whl
           path: dist/arduino*.whl
@@ -153,7 +133,7 @@ jobs:
 
   build:
     runs-on: ubuntu-24.04-arm
-    needs: [ detect, upload-whl ]
+    needs: [ detect ]
     env:
       PYTHON_VERSION: "3.13"
       TASKFILE_VERSION: "3.45.4"
@@ -164,18 +144,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
 
       - name: Read container config
         id: config
         run: |
           CI_JSON="containers/${{ matrix.container }}/ci.json"
-          echo "build_whl=$(jq -r '.build_whl // false' "$CI_JSON")" >> $GITHUB_OUTPUT
-          echo "update_compose=$(jq -r '.update_compose // false' "$CI_JSON")" >> $GITHUB_OUTPUT
-          echo "tag_latest=$(jq -r '.tag_latest // false' "$CI_JSON")" >> $GITHUB_OUTPUT
-          echo "tag_prefix=$(jq -r '.tag_prefix' "$CI_JSON")" >> $GITHUB_OUTPUT
-          echo "watch_paths=$(jq -r '.watch_paths | join(" ")' "$CI_JSON")" >> $GITHUB_OUTPUT
           BUILD_ARGS=$(jq -r '.build_args // {} | to_entries | map("\(.key)=\(.value)") | join("\n")' "$CI_JSON")
           echo "build_args<<EOF" >> $GITHUB_OUTPUT
           echo "$BUILD_ARGS" >> $GITHUB_OUTPUT
@@ -188,70 +161,22 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install crane
-        uses: imjasonh/setup-crane@v0.4
-
-      - name: Check if rebuild required
-        id: rebuild_check
-        run: |
-          TAG_PREFIX="${{ steps.config.outputs.tag_prefix }}"
-          CURRENT_TAG="${TAG_PREFIX}/${{ needs.detect.outputs.version }}"
-          git fetch --tags
-          PREV_TAG=$(git tag --sort=-version:refname | grep "^${TAG_PREFIX}/" | grep -v "^${CURRENT_TAG}$" | head -1)
-
-          if [[ -z "$PREV_TAG" ]]; then
-            echo "No previous tag found for ${{ matrix.container }} — full build required"
-            echo "needs_build=true" >> $GITHUB_OUTPUT
-            echo "prev_version=" >> $GITHUB_OUTPUT
-          else
-            PREV_VERSION="${PREV_TAG#${TAG_PREFIX}/}"
-            echo "prev_version=$PREV_VERSION" >> $GITHUB_OUTPUT
-            CHANGED=$(git diff --name-only "$PREV_TAG" HEAD -- ${{ steps.config.outputs.watch_paths }})
-            if [[ -n "$CHANGED" ]]; then
-              echo "Sources changed since $PREV_TAG — full build required"
-              echo "$CHANGED"
-              echo "needs_build=true" >> $GITHUB_OUTPUT
-            elif ! crane manifest ${{ env.GHCR_DESTINATION_ORG }}/app-bricks/${{ matrix.container }}:${PREV_VERSION} > /dev/null 2>&1; then
-              echo "Previous image ${PREV_VERSION} not found in registry — full build required"
-              echo "needs_build=true" >> $GITHUB_OUTPUT
-            else
-              echo "No source changes and previous image exists — will re-tag from ${PREV_VERSION}"
-              echo "needs_build=false" >> $GITHUB_OUTPUT
-            fi
-          fi
-
-      - name: Re-tag image
-        if: steps.rebuild_check.outputs.needs_build == 'false'
-        run: |
-          echo "Re-tagging ${{ matrix.container }} from ${{ steps.rebuild_check.outputs.prev_version }} to ${{ needs.detect.outputs.version }}"
-          crane copy \
-            ${{ env.GHCR_DESTINATION_ORG }}/app-bricks/${{ matrix.container }}:${{ steps.rebuild_check.outputs.prev_version }} \
-            ${{ env.GHCR_DESTINATION_ORG }}/app-bricks/${{ matrix.container }}:${{ needs.detect.outputs.version }}
-          if [[ "${{ steps.config.outputs.tag_latest }}" == "true" ]] && [[ "${{ needs.detect.outputs.prerelease }}" == "false" ]]; then
-            crane copy \
-              ${{ env.GHCR_DESTINATION_ORG }}/app-bricks/${{ matrix.container }}:${{ steps.rebuild_check.outputs.prev_version }} \
-              ${{ env.GHCR_DESTINATION_ORG }}/app-bricks/${{ matrix.container }}:latest
-          fi
-
       - name: Setup Docker buildx
-        if: steps.rebuild_check.outputs.needs_build == 'true'
         uses: docker/setup-buildx-action@v4
 
       - name: Extract Docker metadata
-        if: steps.rebuild_check.outputs.needs_build == 'true'
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           tags: |
             type=raw,value=${{ needs.detect.outputs.version }}
-            type=raw,value=latest,enable=${{ steps.config.outputs.tag_latest == 'true' && needs.detect.outputs.prerelease == 'false' }}
+            type=raw,value=latest,enable=${{ needs.detect.outputs.prerelease == 'false' }}
           images: ${{ env.GHCR_DESTINATION_ORG }}/app-bricks/${{ matrix.container }}
           labels: |
             org.opencontainers.image.source=${{ env.GH_DESTINATION_REPO }}
             org.opencontainers.image.url=${{ env.GH_DESTINATION_REPO }}
 
       - name: Build and push Docker image
-        if: steps.rebuild_check.outputs.needs_build == 'true'
         uses: docker/build-push-action@v7
         with:
           context: ./containers/${{ matrix.container }}
@@ -260,6 +185,8 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           platforms: linux/arm64
+          cache-from: type=registry,ref=${{ env.GHCR_DESTINATION_ORG }}/app-bricks/${{ matrix.container }}:buildcache
+          cache-to: type=registry,ref=${{ env.GHCR_DESTINATION_ORG }}/app-bricks/${{ matrix.container }}:buildcache,mode=max
           provenance: false
           build-args: ${{ steps.config.outputs.build_args }}
 
@@ -269,42 +196,10 @@ jobs:
           container: ${{ matrix.container }}
           version: ${{ needs.detect.outputs.version }}
           registry: ${{ env.GHCR_DESTINATION_ORG }}
-
-      - name: Update compose file references
-        if: steps.config.outputs.update_compose == 'true'
-        env:
-          CONTAINER: ${{ matrix.container }}
-          VERSION: ${{ needs.detect.outputs.version }}
-        run: |
-          find src -name "brick_compose.yaml" | while read f; do
-            if grep -q "$CONTAINER" "$f"; then
-              echo "  Updating: $f"
-              sed -i -E "s|${CONTAINER}:[^ \"']+|${CONTAINER}:${VERSION}|g" "$f"
-            fi
-          done
-
-      - name: Configure Git
-        if: steps.config.outputs.update_compose == 'true'
-        run: |
-          git config user.name "AppLab Actions Bot"
-          git config user.email "bot@arduino.cc"
-
-      - name: Create Pull Request
-        if: steps.config.outputs.update_compose == 'true'
-        uses: peter-evans/create-pull-request@v8
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "feat: update ${{ matrix.container }} image references"
-          title: "[RELEASE BOT] Update ${{ matrix.container }} image references"
-          body: |
-            This PR was automatically generated after releasing `${{ matrix.container }}:${{ needs.detect.outputs.version }}`.
-          branch: "container-release-${{ matrix.container }}-${{ needs.detect.outputs.version }}"
-          base: main
-          draft: true
-
+          
   build-downstream:
     runs-on: ubuntu-24.04-arm
-    needs: [ detect, build ]
+    needs: [ detect, upload-whl, build ]
     if: needs.detect.outputs.downstream_containers != '[]'
     env:
       PYTHON_VERSION: "3.13"
@@ -322,8 +217,6 @@ jobs:
         run: |
           CI_JSON="containers/${{ matrix.container }}/ci.json"
           echo "build_whl=$(jq -r '.build_whl // false' "$CI_JSON")" >> $GITHUB_OUTPUT
-          echo "update_compose=$(jq -r '.update_compose // false' "$CI_JSON")" >> $GITHUB_OUTPUT
-          echo "tag_latest=$(jq -r '.tag_latest // false' "$CI_JSON")" >> $GITHUB_OUTPUT
           BUILD_ARGS=$(jq -r '.build_args // {} | to_entries | map("\(.key)=\(.value)") | join("\n")' "$CI_JSON")
           echo "build_args<<EOF" >> $GITHUB_OUTPUT
           echo "$BUILD_ARGS" >> $GITHUB_OUTPUT
@@ -348,11 +241,11 @@ jobs:
 
       - name: Extract Docker metadata
         id: meta
-        uses: docker/metadata-action@v4
+        uses: docker/metadata-action@v6
         with:
           tags: |
             type=raw,value=${{ needs.detect.outputs.version }}
-            type=raw,value=latest,enable=${{ steps.config.outputs.tag_latest == 'true' && needs.detect.outputs.prerelease == 'false' }}
+            type=raw,value=latest,enable=${{ needs.detect.outputs.prerelease == 'false' }}
           images: ${{ env.GHCR_DESTINATION_ORG }}/app-bricks/${{ matrix.container }}
           labels: |
             org.opencontainers.image.source=${{ env.GH_DESTINATION_REPO }}
@@ -367,6 +260,8 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           platforms: linux/arm64
+          cache-from: type=registry,ref=${{ env.GHCR_DESTINATION_ORG }}/app-bricks/${{ matrix.container }}:buildcache
+          cache-to: type=registry,ref=${{ env.GHCR_DESTINATION_ORG }}/app-bricks/${{ matrix.container }}:buildcache,mode=max
           provenance: false
           build-args: |
             ${{ steps.config.outputs.build_args }}
@@ -379,39 +274,6 @@ jobs:
           container: ${{ matrix.container }}
           version: ${{ needs.detect.outputs.version }}
           registry: ${{ env.GHCR_DESTINATION_ORG }}
-
-      - name: Update compose file references
-        if: steps.config.outputs.update_compose == 'true'
-        env:
-          CONTAINER: ${{ matrix.container }}
-          VERSION: ${{ needs.detect.outputs.version }}
-        run: |
-          find src -name "brick_compose.yaml" | while read f; do
-            if grep -q "$CONTAINER" "$f"; then
-              echo "  Updating: $f"
-              sed -i -E "s|${CONTAINER}:[^ \"']+|${CONTAINER}:${VERSION}|g" "$f"
-            fi
-          done
-
-      - name: Configure Git
-        if: steps.config.outputs.update_compose == 'true'
-        run: |
-          git config user.name "AppLab Actions Bot"
-          git config user.email "bot@arduino.cc"
-
-      - name: Create Pull Request
-        if: steps.config.outputs.update_compose == 'true'
-        uses: peter-evans/create-pull-request@v8
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "feat: update ${{ matrix.container }} image references"
-          title: "[RELEASE BOT] Update ${{ matrix.container }} image references"
-          body: |
-            This PR was automatically generated after releasing `${{ matrix.container }}:${{ needs.detect.outputs.version }}`.
-          branch: "container-release-${{ matrix.container }}-${{
-            needs.detect.outputs.version }}"
-          base: main
-          draft: true
 
   upload-release:
     runs-on: ubuntu-24.04-arm
