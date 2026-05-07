@@ -120,7 +120,6 @@ jobs:
               pip install uv
               export PATH="$HOME/.local/bin:$PATH"
               uv tool install "go-task-bin==${{ env.TASKFILE_VERSION }}"
-              uv pip install --system --break-system-packages https://github.com/${{ github.repository }}/releases/download/opencv/4.13.0.92/opencv_python_headless-4.13.0.92-cp313-cp313-linux_aarch64.whl
               task init:ci
               task build
             "
