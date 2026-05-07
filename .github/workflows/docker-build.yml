@@ -274,7 +274,7 @@ jobs:
               echo 'break-system-packages = true' >> /etc/pip.conf
               git config --global --add safe.directory '*'
               pip install uv
-              export PATH="$HOME/.local/bin:$PATH"
+              export PATH=\"/root/.local/bin:\$PATH\"
               uv tool install "go-task-bin==${{ env.TASKFILE_VERSION }}"
               task init:ci
               task build
