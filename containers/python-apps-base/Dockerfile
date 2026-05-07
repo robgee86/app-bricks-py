@@ -11,7 +11,7 @@ COPY ./streamlit/config.toml /home/app/.streamlit/config.toml
 
 COPY ./*.sh /
 COPY ./arduino*.whl /app/
-RUN bash -c 'WHL_FILES=(/app/*.whl) && uv pip install --system --no-cache-dir "${WHL_FILES[@]}"[all]'; \
+RUN bash -c 'WHL_FILES=(/app/*.whl) && uv pip install --system --no-cache-dir "${WHL_FILES[@]}"'; \
     rm /app/*.whl; \    
     # fix permissions for /home/app
     chown arduino:arduino -R /home/app; \

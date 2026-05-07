@@ -4,6 +4,7 @@
 
 # Base stage shared for building venvs and the licensed gem
 FROM python:3.13-slim AS venv-base
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     pkg-config \
@@ -28,21 +29,27 @@ RUN gem install licensed -v 5.0.6 && \
 
 # Cached venv stages
 FROM venv-base AS venv-python-base
-COPY containers/python-base/requirements-base.txt /req.txt
-RUN --mount=type=cache,target=/root/.cache/pip \
-    python -m venv /venvs/python-base && \
-    /venvs/python-base/bin/pip install -q -r /req.txt && \
+COPY containers/python-base/pyproject.toml containers/python-base/uv.lock /app/
+WORKDIR /app
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv venv --seed /venvs/python-base && \
+    UV_PROJECT_ENVIRONMENT=/venvs/python-base \
+        uv sync --frozen --inexact --no-install-project && \
     find /venvs/python-base/lib/python*/site-packages -mindepth 1 -maxdepth 1 \
         ! -name '*.dist-info' \
         ! -name 'pip' ! -name 'setuptools' ! -name 'wheel' \
         ! -name 'pkg_resources' ! -name '_distutils_hack' \
         -exec rm -rf {} +
 
+# NOTE: aihub-models-runner and gesture-recognition-runner are based on ubuntu:24.04 which ships
+# Python 3.12, but venv-base provides Python 3.13. This discrepancy should be acceptable.
 FROM venv-base AS venv-aihub-models-runner
-COPY containers/aihub-models-runner/requirements-base.txt /req.txt
-RUN --mount=type=cache,target=/root/.cache/pip \
-    python -m venv /venvs/aihub-models-runner && \
-    /venvs/aihub-models-runner/bin/pip install -q -r /req.txt && \
+COPY containers/aihub-models-runner/pyproject.toml containers/aihub-models-runner/uv.lock /app/
+WORKDIR /app
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv venv --seed /venvs/aihub-models-runner && \
+    UV_PROJECT_ENVIRONMENT=/venvs/aihub-models-runner \
+        uv sync --frozen --inexact --no-install-project && \
     find /venvs/aihub-models-runner/lib/python*/site-packages -mindepth 1 -maxdepth 1 \
         ! -name '*.dist-info' \
         ! -name 'pip' ! -name 'setuptools' ! -name 'wheel' \
@@ -50,10 +57,12 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         -exec rm -rf {} +
 
 FROM venv-base AS venv-gesture-recognition-runner
-COPY containers/gesture-recognition-runner/requirements.txt /req.txt
-RUN --mount=type=cache,target=/root/.cache/pip \
-    python -m venv /venvs/gesture-recognition-runner && \
-    /venvs/gesture-recognition-runner/bin/pip install -q -r /req.txt && \
+COPY containers/gesture-recognition-runner/pyproject.toml containers/gesture-recognition-runner/uv.lock /app/
+WORKDIR /app
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv venv --seed /venvs/gesture-recognition-runner && \
+    UV_PROJECT_ENVIRONMENT=/venvs/gesture-recognition-runner \
+        uv sync --frozen --inexact --no-install-project && \
     find /venvs/gesture-recognition-runner/lib/python*/site-packages -mindepth 1 -maxdepth 1 \
         ! -name '*.dist-info' \
         ! -name 'pip' ! -name 'setuptools' ! -name 'wheel' \
@@ -61,11 +70,13 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         -exec rm -rf {} +
 
 FROM venv-base AS venv-arduino-app-bricks
-COPY pyproject.toml .
-COPY src/arduino/app_tools/ src/arduino/app_tools/
-RUN --mount=type=cache,target=/root/.cache/pip \
-    python -m venv /venvs/arduino-app-bricks && \
-    SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 /venvs/arduino-app-bricks/bin/pip install -q ".[all]" && \
+COPY pyproject.toml uv.lock /app/
+COPY src/arduino/app_tools/ /app/src/arduino/app_tools/
+WORKDIR /app
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv venv --seed /venvs/arduino-app-bricks && \
+    UV_PROJECT_ENVIRONMENT=/venvs/arduino-app-bricks \
+        uv sync --frozen --inexact --no-install-project --no-dev && \
     find /venvs/arduino-app-bricks/lib/python*/site-packages -mindepth 1 -maxdepth 1 \
         ! -name '*.dist-info' \
         ! -name 'pip' ! -name 'setuptools' ! -name 'wheel' \

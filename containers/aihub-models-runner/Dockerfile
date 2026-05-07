@@ -6,7 +6,9 @@ ARG DEBIAN_FRONTEND=noninteractive
 
 FROM ubuntu:24.04
 
-COPY requirements-base.txt .
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+COPY pyproject.toml uv.lock ./
 
 ENV PYTHONUNBUFFERED=1
 
@@ -24,11 +26,11 @@ RUN apt-get update \
     && apt-get dist-clean \
     && rm -rf /var/lib/apt/lists/*; \
     # Make the venv the default for child images
-    python -m venv --system-site-packages /opt/venv; \
-    # Install Python dependencies into the venv
-    /opt/venv/bin/pip install --no-cache-dir -r requirements-base.txt; \
-    /opt/venv/bin/python -m compileall /opt/venv/lib; \
-    rm requirements-base.txt; \
+    uv venv --system-site-packages --seed /opt/venv; \
+    # Install Python dependencies into the venv from uv.lock
+    UV_PROJECT_ENVIRONMENT=/opt/venv uv sync --frozen --inexact --no-install-project --no-cache; \
+    rm pyproject.toml uv.lock; \
+    /opt/venv/bin/python3 -m compileall /opt/venv/lib; \
     # Remove unneeded linux firmware
     dpkg -r --force-depends linux-firmware-dragonwing qcom-video-firmware tc9564-firmware firmware-qcm6490-msl firmware-qcom-hlosfw linux-firmware 
 

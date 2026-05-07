@@ -20,6 +20,7 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends --no-install-suggests git ca-certificates curl
+          pip install uv
           git config --global --add safe.directory '*'
 
       - name: Checkout repository

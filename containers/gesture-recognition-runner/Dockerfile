@@ -9,6 +9,6 @@ FROM ${REGISTRY}app-bricks/aihub-models-runner:${BASE_IMAGE_VERSION}
 
 COPY . .
 
-RUN python -m pip install --no-cache-dir -r requirements.txt \
-    && python -m compileall /opt/venv \
-    && rm requirements.txt
+RUN UV_PROJECT_ENVIRONMENT=/opt/venv uv sync --frozen --inexact --no-install-project --no-cache \
+    && rm pyproject.toml uv.lock \
+    && python -m compileall /opt/venv
