@@ -19,11 +19,10 @@ runs:
       shell: bash
       run: curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
 
-    - name: Install prerequisites
+    - name: Install task
       shell: bash
       run: |
         which task || curl -sSfL https://taskfile.dev/install.sh | sh -s -- -b /usr/local/bin
-        task init:ci
 
     - name: Generate delta SBOM
       shell: bash

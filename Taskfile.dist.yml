@@ -1,20 +1,13 @@
 version: "3"
 
-vars:
-  PYTHON_VERSION_MIN: "3.13"
-
 tasks:
   init:
     desc: Initialize development environment
-    deps:
-      - check:python:version
     cmds:
       - task: install:deps
 
   init:ci:
     desc: Initialize CI environment
-    deps:
-      - check:python:version
     cmds:
       - apt-get update
       - apt-get install -y --no-install-recommends --no-install-suggests libasound2-dev portaudio19-dev libzbar0
@@ -24,22 +17,6 @@ tasks:
       - apt-get install -y --no-install-recommends --no-install-suggests libjpeg62-turbo-dev libpng-dev libtiff-dev libwebp-dev libopenblas-dev liblapacke-dev
       - apt-get install -y --no-install-recommends --no-install-suggests libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
       - task: install:deps
-
-  check:python:version:
-    desc: Check if Python version is at least {{.PYTHON_VERSION_MIN}}
-    cmds:
-      - |
-        check_version() {
-          python_alias=$1
-          python_version=$($python_alias --version 2>&1 | awk '{print $2}')
-          required_version="{{.PYTHON_VERSION_MIN}}"
-          if [ "$(printf '%s\n' "$required_version" "$python_version" | sort -V | head -n1)" != "$required_version" ]; then
-            echo "$python_alias version must be at least $required_version. Current version: $python_version"
-            exit 1
-          fi
-        }
-
-        check_version python
 
   install:deps:
     desc: Install project dependencies
@@ -133,4 +110,4 @@ tasks:
   sbom:delta:
     desc: Generate delta SBOMs for containers (requires syft and registry access)
     cmds:
-      - uv run python3 ./scripts/sbom_delta.py {{.CLI_ARGS}}
+      - python3 ./scripts/sbom_delta.py {{.CLI_ARGS}}
