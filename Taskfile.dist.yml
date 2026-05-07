@@ -57,7 +57,7 @@ tasks:
       STATIC_DIR: src/arduino/app_bricks/static
     cmds:
       - rm -rf {{.STATIC_DIR}}
-      - arduino-bricks-release --static-dir {{.STATIC_DIR}}
+      - uv run arduino-bricks-release --static-dir {{.STATIC_DIR}}
 
   test:
     desc: Run all unit tests
