@@ -41,6 +41,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         ! -name 'pkg_resources' ! -name '_distutils_hack' \
         -exec rm -rf {} +
 
+# NOTE: aihub-models-runner and gesture-recognition-runner are based on ubuntu:24.04 which ships
+# Python 3.12, but venv-base provides Python 3.13. This discrepancy should be acceptable.
 FROM venv-base AS venv-aihub-models-runner
 COPY containers/aihub-models-runner/pyproject.toml containers/aihub-models-runner/uv.lock /app/
 WORKDIR /app
@@ -73,7 +75,6 @@ COPY src/arduino/app_tools/ /app/src/arduino/app_tools/
 WORKDIR /app
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv venv --seed /venvs/arduino-app-bricks && \
-    SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 \
     UV_PROJECT_ENVIRONMENT=/venvs/arduino-app-bricks \
         uv sync --frozen --inexact --no-install-project --no-dev && \
     find /venvs/arduino-app-bricks/lib/python*/site-packages -mindepth 1 -maxdepth 1 \
