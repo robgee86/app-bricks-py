@@ -1,0 +1,12 @@
+name: Build Media Stack
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-media-stack:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
