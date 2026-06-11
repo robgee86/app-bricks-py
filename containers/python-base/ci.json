@@ -6,9 +6,9 @@
   "update_compose": false,
   "build_args": {
     "OPENCV_WHL_URL": "https://github.com/robgee86/app-bricks-py/releases/download/media-stack%2F1.0.0/opencv_python_headless-4.13.0+1ddb20b-cp313-cp313-linux_aarch64.whl",
-    "OPENCV_WHL_DIGEST": "sha256:f783b9d31353692215d33faa7e11e1cc2fc56318420bcd11ed20b03a4b3b121d",
-    "FFMPEG_LIBS_URL": "REPLACE_ME",
-    "FFMPEG_LIBS_DIGEST": "REPLACE_ME",
+    "OPENCV_WHL_DIGEST": "sha256:72b25dcfaeb3cc9fc09c6608c10817d8d30f9b06567eb53ed7f42eba418f4acc",
+    "FFMPEG_LIBS_URL": "https://github.com/robgee86/app-bricks-py/releases/download/media-stack%2F1.0.0/ffmpeg-libs-7.1.4-0+deb13u1.tar.gz",
+    "FFMPEG_LIBS_DIGEST": "sha256:f630cb8499ab56a45f72f9306ebf81a820ac624a46660022e1ec7d626ab7aa43",
     "GSTREAMER_GOOD_DEB_URL": "https://github.com/robgee86/app-bricks-py/releases/download/media-stack%2F1.0.0/gstreamer1.0-plugins-good_1.26.2-1+deb13u1_arm64.deb",
     "GSTREAMER_GOOD_DEB_DIGEST": "sha256:363759707c4c136bf427c21b3eba73e318fc1ebd5af128d51790e0428495aa96",
     "LIBCAMERA_DEB_URL": "https://github.com/arduino/app-bricks-py/releases/download/libcamera%2F0.7.0-4/libcamera0.7_0.7.0-4_arm64.deb",
