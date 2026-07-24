@@ -1,0 +1,9 @@
+id: arduino:anomaly_detection
+name: Anomaly Detection
+description: |
+  Self-calibrating anomaly detection for numeric sensor streams, no thresholds or models required.
+  AnomalyDetection learns what normal looks like for one signal (self-calibrating, optionally seasonal statistics),
+  layers optional hard safety limits, detects level shifts, and can forecast limit breaches ahead of time.
+  AnomalyDetectionGroup watches how up to five related signals behave together, flagging abnormal combinations or a
+  broken relationship between them, with built-in coincidence analysis to tell one problem from two.
+category: miscellaneous

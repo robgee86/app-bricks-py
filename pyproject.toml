@@ -71,6 +71,9 @@ streamlit_ui = [
 mood_detector = [
     "nltk",
 ]
+anomaly_detection = [
+    "river==0.25.*",
+]
 stream = [
     "websockets",
 ]
@@ -101,6 +104,7 @@ all = [
     "arduino_app_bricks[web_ui]",
     "arduino_app_bricks[streamlit_ui]",
     "arduino_app_bricks[mood_detector]",
+    "arduino_app_bricks[anomaly_detection]",
     "arduino_app_bricks[stream]",
     "arduino_app_bricks[arduino_cloud]",
     "arduino_app_bricks[telegram_bot]",
