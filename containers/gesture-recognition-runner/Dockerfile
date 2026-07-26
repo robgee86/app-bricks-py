@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MPL-2.0
 
 ARG REGISTRY
-ARG BASE_IMAGE_VERSION=latest
+ARG BASE_IMAGE_VERSION
 
 FROM ${REGISTRY}app-bricks/aihub-models-runner:${BASE_IMAGE_VERSION}
 

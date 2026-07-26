@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import container_deps
 
 VARIABLE_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -48,34 +49,6 @@ def load_json(path: Path) -> dict[str, Any]:
     return payload
 
 
-def load_container_config(containers_dir: Path, container: str) -> dict[str, Any]:
-    """Load ``ci.json`` metadata for a container."""
-    return load_json(containers_dir / container / "ci.json")
-
-
-def build_resolution_context(
-    config: dict[str, Any],
-    registry: str,
-    version: str,
-    build_args: dict[str, str] | None = None,
-) -> dict[str, str]:
-    """Build the variable map used to resolve runtime base templates."""
-    default_build_args = config.get("build_args") or {}
-    if not isinstance(default_build_args, dict):
-        raise SbomDeltaError("Expected 'build_args' to be a JSON object.")
-
-    context = {str(k): str(v) for k, v in default_build_args.items()}
-    context["REGISTRY"] = normalize_registry(registry)
-    context["VERSION"] = version
-    context["BASE_IMAGE_VERSION"] = version
-
-    for key, value in (build_args or {}).items():
-        context[str(key)] = str(value)
-
-    context["REGISTRY"] = normalize_registry(context["REGISTRY"])
-    return context
-
-
 def resolve_template(template: str, context: dict[str, str]) -> str:
     """Resolve ``${VAR}`` placeholders inside a template string."""
     resolved = template
@@ -90,29 +63,23 @@ def resolve_template(template: str, context: dict[str, str]) -> str:
     raise SbomDeltaError(f"Could not resolve template after 10 passes: {template}")
 
 
-def resolve_runtime_base(
-    containers_dir: Path,
-    container: str,
-    registry: str,
-    version: str,
-    build_args: dict[str, str] | None = None,
-) -> str:
+def resolve_runtime_base(containers_dir: Path, container: str, registry: str, version: str) -> str:
     """Resolve the fully qualified runtime base image for a container.
 
-    Uses the ``sbom.runtime_base`` template in the container's ``ci.json``,
-    expanding ``${VAR}`` placeholders with registry, version, and build args.
+    The base image is derived from the container's Dockerfile, expanding the
+    ``${REGISTRY}`` and ``${BASE_IMAGE_VERSION}`` build-arg placeholders.
     """
-    config = load_container_config(containers_dir, container)
-    sbom_config = config.get("sbom")
-    if not isinstance(sbom_config, dict):
-        raise SbomDeltaError(f"Container '{container}' is missing 'sbom.runtime_base'.")
+    try:
+        template = container_deps.resolve_base_image(containers_dir / container / "Dockerfile")
+    except (OSError, ValueError) as exc:
+        raise SbomDeltaError(f"Cannot resolve base image of '{container}': {exc}") from exc
 
-    runtime_base = sbom_config.get("runtime_base")
-    if not isinstance(runtime_base, str) or not runtime_base.strip():
-        raise SbomDeltaError(f"Container '{container}' is missing 'sbom.runtime_base'.")
-
-    context = build_resolution_context(config=config, registry=registry, version=version, build_args=build_args)
-    return resolve_template(runtime_base.strip(), context)
+    context = {
+        "REGISTRY": normalize_registry(registry),
+        "VERSION": version,
+        "BASE_IMAGE_VERSION": version,
+    }
+    return resolve_template(template, context)
 
 
 # ---------------------------------------------------------------------------
@@ -445,8 +412,8 @@ def require_command(command: str, install_hint: str) -> None:
 
 
 def discover_containers(containers_dir: Path) -> list[str]:
-    """Discover containers by looking for ``ci.json`` files."""
-    return sorted(p.parent.name for p in containers_dir.glob("*/ci.json") if p.is_file())
+    """Discover containers by looking for Dockerfiles."""
+    return sorted(p.parent.name for p in containers_dir.glob("*/Dockerfile") if p.is_file())
 
 
 def build_container_image(registry: str, container: str, version: str) -> str:
@@ -527,7 +494,7 @@ def run_generate(args: argparse.Namespace) -> int:
     containers_dir = REPO_ROOT / "containers"
     containers = list(args.containers) if args.containers else discover_containers(containers_dir)
     if not containers:
-        raise SbomDeltaError(f"No containers found (looked for ci.json under {containers_dir}).")
+        raise SbomDeltaError(f"No containers found (looked for Dockerfiles under {containers_dir}).")
 
     registry = normalize_registry(args.registry)
 
@@ -561,7 +528,7 @@ def run_generate(args: argparse.Namespace) -> int:
 def create_parser() -> argparse.ArgumentParser:
     """Create the CLI argument parser."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("containers", nargs="*", help="Container names (default: all with ci.json).")
+    parser.add_argument("containers", nargs="*", help="Container names (default: all with a Dockerfile).")
     parser.add_argument("--registry", default=os.environ.get("REGISTRY", "ghcr.io/arduino/"), help="Registry prefix.")
     parser.add_argument("--version", default=os.environ.get("VERSION", "latest"), help="Image tag to scan.")
     return parser

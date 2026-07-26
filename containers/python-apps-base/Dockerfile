@@ -3,14 +3,14 @@
 # SPDX-License-Identifier: MPL-2.0
 
 ARG REGISTRY
-ARG BASE_IMAGE_VERSION=latest
+ARG BASE_IMAGE_VERSION
 FROM ${REGISTRY}app-bricks/python-base:${BASE_IMAGE_VERSION}
 
 # Copy the Streamlit configuration file with customized settings in home app shared directory
 COPY ./streamlit/config.toml /home/app/.streamlit/config.toml
 
 COPY ./*.sh /
-COPY ./arduino*.whl /app/
+COPY --from=wheel arduino*.whl /app/
 RUN bash -c 'WHL_FILES=(/app/*.whl) && uv pip install --system --no-cache-dir "${WHL_FILES[@]}"[all]'; \
     rm /app/*.whl; \    
     # fix permissions for /home/app

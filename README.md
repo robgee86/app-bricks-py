@@ -145,7 +145,7 @@ If it is needed to use a different version, override it via 'APPSLAB_VERSION' en
 
 ## Release
 
-Release is based on tags pushed to `main`. A single workflow (`docker-github-publish.yml`) handles all container releases and detects which container to build from the tag prefix defined in each container's `ci.json`.
+Release is based on tags pushed to `main`. A single workflow (`docker-github-publish.yml`) handles all container releases and detects which containers to build from the tag prefix, matched against the release groups in `docker-bake.hcl`.
 
 | Tag | What it releases |
 |---|---|

@@ -1,0 +1,68 @@
+name: Build Container
+description: Build and push a container image with docker buildx bake.
+
+inputs:
+  container:
+    description: Container name, matching a target in docker-bake.hcl
+    required: true
+  registry:
+    description: Registry prefix images are published under, with a trailing slash (e.g. ghcr.io/arduino/)
+    required: true
+  version:
+    description: Image tag to publish, also used as the base image tag of downstream containers
+    required: true
+  tags:
+    description: Tag expressions for docker/metadata-action
+    required: true
+  cache-tag:
+    description: Tag holding the build cache. Empty disables both cache import and export.
+    required: false
+    default: ""
+  skip-cache:
+    description: Rebuild without importing the cache. The cache is still exported.
+    required: false
+    default: "false"
+  registry-host:
+    description: Registry to authenticate against
+    required: false
+    default: ghcr.io
+  token:
+    description: Token to authenticate against the registry
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Docker buildx
+      uses: docker/setup-buildx-action@v4
+
+    - name: Log into registry ${{ inputs.registry-host }}
+      uses: docker/login-action@v4
+      with:
+        registry: ${{ inputs.registry-host }}
+        username: ${{ github.repository_owner }}
+        password: ${{ inputs.token }}
+
+    - name: Extract Docker metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ inputs.registry }}app-bricks/${{ inputs.container }}
+        tags: ${{ inputs.tags }}
+        labels: |
+          org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          org.opencontainers.image.url=https://github.com/${{ github.repository }}
+
+    - name: Build and push Docker image
+      uses: docker/bake-action@v7
+      with:
+        targets: ${{ inputs.container }}
+        files: |
+          ./docker-bake.hcl
+          cwd://${{ steps.meta.outputs.bake-file }}
+        push: true
+      env:
+        REGISTRY: ${{ inputs.registry }}
+        BASE_IMAGE_VERSION: ${{ inputs.version }}
+        CACHE_TAG: ${{ inputs.cache-tag }}
+        SKIP_CACHE: ${{ inputs.skip-cache }}
