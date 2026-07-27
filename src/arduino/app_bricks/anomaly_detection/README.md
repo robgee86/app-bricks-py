@@ -17,6 +17,9 @@ Both fire plain callbacks with a flat event record (`metric`, `kind`, `value`, `
 
 - Adaptive detection with automatic warm-up, no configuration required
 - Safe out of the box on spiky, glitchy, quantized and slowly drifting feeds
+- High-rate feeds (gyros, accelerometers — tens to hundreds of Hz) are bucketed to ~1s
+  automatically and judged on both level and spread, so ordinary motion is learned as
+  normal while sustained abnormal vibration fires (`stats.lane` says which)
 - Seasonal signals via `period="1d"`
 - Hard safety `limits`, active from the very first push (no warm-up)
 - Level-shift detection (`on_drift`) always on, for free

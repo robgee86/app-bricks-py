@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from river import anomaly, drift, stats as river_stats, time_series
 
-from .config import MAX_SEASONAL_LENGTH, TARGET_SEASONAL_LENGTH
+from .config import MAX_SEASONAL_LENGTH, RATE_BUCKET_TARGET_S, RATE_GUARD_IAT_S, TARGET_SEASONAL_LENGTH
 
 # Holt-Winters smoothing constants; the batch re-fit owns these, never the sensitivity dial.
 HW_ALPHA, HW_BETA, HW_GAMMA = 0.3, 0.1, 0.6
@@ -28,9 +28,9 @@ SCORER_GRACE = 30
 CUTOFF_WINDOW = 500
 
 
-def quantile_filter(scorer, quantile: float) -> anomaly.QuantileFilter:
+def quantile_filter(scorer, quantile: float, protect: bool = True) -> anomaly.QuantileFilter:
     """A QuantileFilter whose cutoff has bounded memory (rolling quantile)."""
-    filter_ = anomaly.QuantileFilter(scorer, q=quantile)
+    filter_ = anomaly.QuantileFilter(scorer, q=quantile, protect_anomaly_detector=protect)
     filter_.quantile = river_stats.RollingQuantile(q=quantile, window_size=CUTOFF_WINDOW)
     return filter_
 
@@ -98,6 +98,53 @@ class Evaluation:
     stats: dict
 
 
+@dataclass(frozen=True)
+class Bucket:
+    """One scoring unit: a raw push, or an aggregate of them under the rate guard.
+
+    High-rate kinematic signals put activity in the variance, not the level (the mean of
+    an oscillation is ~0), so a bucket carries both faces of its samples.
+    """
+
+    level: float
+    spread: float | None  # None when the bucket is a single raw push
+
+
+class RateBucketer:
+    """Aggregates high-rate pushes into ~1s buckets so scoring keeps human time scales.
+
+    Below the guard rate this is a pass-through: every push is its own bucket.
+    """
+
+    def __init__(self):
+        self.k = 1  # pushes per bucket
+        self.bucket_size_s = None
+        self.resolved = False
+        self._acc = []
+
+    def resolve(self, median_iat: float):
+        self.resolved = True
+        if median_iat < RATE_GUARD_IAT_S:
+            self.k = max(2, round(RATE_BUCKET_TARGET_S / median_iat))
+            self.bucket_size_s = round(self.k * median_iat, 3)
+
+    @property
+    def active(self) -> bool:
+        return self.k > 1
+
+    def update(self, value: float) -> Bucket | None:
+        """Feed one raw push; returns a Bucket when one completes, None mid-bucket."""
+        if not self.active:
+            return Bucket(level=value, spread=None)
+        self._acc.append(value)
+        if len(self._acc) < self.k:
+            return None
+        mean = sum(self._acc) / len(self._acc)
+        variance = sum((v - mean) ** 2 for v in self._acc) / len(self._acc)
+        self._acc = []
+        return Bucket(level=mean, spread=math.sqrt(max(variance, 0.0)))
+
+
 class TrimmedScorer(anomaly.base.SupervisedAnomalyDetector):
     """Rolling trimmed-statistics scorer: one detector that stays safe across most feeds.
 
@@ -119,6 +166,9 @@ class TrimmedScorer(anomaly.base.SupervisedAnomalyDetector):
         self._values = deque(maxlen=window)
         self._diffs = deque(maxlen=200)
         self._last_raw = None
+        # Transient per-evaluation measurement uncertainty (e.g. a bucket mean's standard
+        # error): deviations within it are not evidence of change.
+        self.uncertainty = 0.0
 
     def observe(self, y: float):
         """Track the raw stream's resolution; sees every push, learned or not."""
@@ -145,6 +195,7 @@ class TrimmedScorer(anomaly.base.SupervisedAnomalyDetector):
         if len(self._values) < self.grace_period:
             return 0.0
         mu, sigma = self.moments()
+        sigma = math.sqrt(sigma**2 + self.uncertainty**2)
         return 2 * abs(statistics.NormalDist(mu, sigma).cdf(y) - 0.5)
 
     def flush(self):
@@ -160,19 +211,27 @@ class TrimmedScorer(anomaly.base.SupervisedAnomalyDetector):
 
 
 class TrimmedPath:
-    """Adaptive non-seasonal detector: the trimmed scorer wrapped in a QuantileFilter."""
+    """Adaptive non-seasonal detector: the trimmed scorer wrapped in a QuantileFilter.
 
-    def __init__(self, quantile: float):
+    protect=False makes the scorer learn anomalous points too: right for recurring,
+    legitimately bimodal statistics (bucket spreads), where refusing to learn the upper
+    mode would keep it anomalous forever.
+    """
+
+    def __init__(self, quantile: float, protect: bool = True):
         self._scorer = TrimmedScorer()
-        self._filter = quantile_filter(self._scorer, quantile)
+        self._filter = quantile_filter(self._scorer, quantile, protect=protect)
 
-    def evaluate(self, value: float) -> Evaluation:
+    def evaluate(self, value: float, uncertainty: float = 0.0) -> Evaluation:
         self._scorer.observe(value)
+        self._scorer.uncertainty = uncertainty
         mu, sigma = self._scorer.moments()
+        sigma = math.sqrt(sigma**2 + uncertainty**2)
         z = (value - mu) / sigma if mu is not None and sigma > 0 else 0.0
         score = self._filter.score_one(None, value)
         anomalous = self._filter.classify(score)
         self._filter.learn_one(None, value)
+        self._scorer.uncertainty = 0.0
         return Evaluation(score, anomalous, mu, {"z": z, "threshold": self._filter.quantile.get()})
 
     def flush(self):
@@ -214,6 +273,10 @@ class SeasonalPath:
     @property
     def resolved(self) -> bool:
         return self._model is not None
+
+    def reset_buffer(self):
+        """Drop pre-resolution samples: the rate guard changed the scoring granularity."""
+        self._prebuffer.clear()
 
     def resolve(self, median_iat: float):
         """Fix L from the measured cadence, apply the rollup guard, replay buffered values."""
@@ -312,6 +375,7 @@ class DriftPath:
 
     def __init__(self, kind: str, ph_threshold: float, warmup: int):
         self.kind = kind
+        self.updates = 0
         if kind == "adwin":
             self._detector = drift.ADWIN()
         else:
@@ -319,6 +383,7 @@ class DriftPath:
         self._mean = None  # slow EWMA, the "expected" level reported on drift events
 
     def update(self, value: float) -> bool:
+        self.updates += 1
         self._detector.update(value)
         fired = self._detector.drift_detected
         if not fired:

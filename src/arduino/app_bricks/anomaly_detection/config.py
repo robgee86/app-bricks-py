@@ -30,6 +30,11 @@ TARGET_SEASONAL_LENGTH = 1440
 # Points required before the inter-arrival time is considered measured and L can be resolved.
 CADENCE_RESOLUTION_POINTS = 30
 
+# The rate guard: feeds arriving faster than this get their learned scoring aggregated
+# into ~1s buckets, so every point-based tolerance keeps meaning human time at any rate.
+RATE_GUARD_IAT_S = 0.5
+RATE_BUCKET_TARGET_S = 1.0
+
 # A drift alarm flushes the learned window only if the shift sustains: a lone spike also
 # trips PageHinkley, and recalibrating on a spike would adopt it as the new normal.
 FLUSH_CONFIRM_POINTS = 10

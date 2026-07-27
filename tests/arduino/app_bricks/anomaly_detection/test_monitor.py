@@ -206,6 +206,57 @@ def test_slow_drift_is_tracked_not_alarmed(recorder):
     assert 58 < spikes[0].expected < 62
 
 
+# ---- high-rate feeds (rate guard) ----------------------------------------------------
+
+
+def test_rate_guard_buckets_high_frequency_feeds():
+    monitor = AnomalyDetection("gyro", persist=False)
+    hz = 62.5
+    for index in range(int(5 * hz)):  # 5 seconds of data
+        monitor.push(random.gauss(0, 0.02), at=T0 + index / hz)
+    assert monitor.stats.bucket_size == pytest.approx(1.0, rel=0.05)
+    assert not monitor.ready, "warm-up must count buckets (seconds), not raw samples"
+
+
+def test_normal_rate_feeds_stay_unbucketed():
+    monitor = AnomalyDetection("slow", persist=False)
+    feed_gaussian(monitor, 60)  # 1s cadence
+    assert monitor.stats.bucket_size is None
+
+
+def test_gyro_handling_is_normal_but_sustained_vibration_fires(recorder):
+    import math
+
+    hz, t = 10.0, 0.0
+    monitor = AnomalyDetection("gyro_x", persist=False)
+    recorder.attach(monitor)
+
+    def push_seconds(seconds, wobble=0.0, freq=1.5):
+        nonlocal t
+        for _ in range(int(seconds * hz)):
+            value = random.gauss(0, 0.02) + wobble * math.sin(2 * math.pi * freq * t)
+            monitor.push(value, at=T0 + t)
+            t += 1.0 / hz
+
+    # Minutes of "rest with occasional ordinary handling": this is normal life.
+    for _ in range(20):
+        push_seconds(10)
+        push_seconds(2, wobble=1.0)
+    assert monitor.ready
+    baseline = len(recorder.of_kind("anomaly"))
+    for _ in range(5):
+        push_seconds(10)
+        push_seconds(2, wobble=1.0)
+    assert len(recorder.of_kind("anomaly")) <= baseline + 1, "ordinary handling must not be chatty"
+
+    # A genuinely sustained, unusually strong vibration: amplitude fault, level ~0.
+    push_seconds(15, wobble=4.0, freq=2.0)
+    fired = recorder.of_kind("anomaly")[baseline:]
+    assert fired, "sustained abnormal vibration must fire"
+    assert fired[-1].stats.lane == "spread", "an amplitude fault is a spread anomaly"
+    assert fired[-1].stats.bucket_size == pytest.approx(1.0, rel=0.05)
+
+
 # ---- drift -------------------------------------------------------------------------
 
 

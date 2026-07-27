@@ -15,14 +15,17 @@ from .config import (
     FLUSH_CONFIRM_SIGMAS,
     config_fingerprint,
     parse_duration,
+    raise_gate,
     resolve_sensitivity,
     validate_limits,
 )
 from .detectors import (
+    Bucket,
     CadenceTracker,
     DriftPath,
     ForecastRunner,
     LimitsGuard,
+    RateBucketer,
     SeasonalPath,
     TrendForecaster,
     TrimmedPath,
@@ -133,7 +136,11 @@ class SignalPipeline:
 
         self.cadence = CadenceTracker()
         self.points = 0
+        self.learned_evaluations = 0
         self.warmup_override = None
+        self._bucketer = RateBucketer()
+        self._spread_path = None  # created if the rate guard trips
+        self._iat_fixed = None  # raw cadence a resolved granularity was derived from
         self._ready_announced = False
         self._cadence_flagged = False
         self._pending_flush = None
@@ -146,9 +153,13 @@ class SignalPipeline:
 
     @property
     def ready(self) -> bool:
-        """True once the learned detector's warm-up is satisfied (limits never wait)."""
+        """True once the learned detector's warm-up is satisfied (limits never wait).
+
+        Warm-up counts evaluations, not pushes: under the rate guard those are buckets,
+        so warm-up means the same wall-clock time at any push rate.
+        """
         if self.warmup_override is not None:
-            return self.points >= self.warmup_override
+            return self.learned_evaluations >= self.warmup_override
         if self._seasonal is not None:
             if not self._seasonal.resolved:
                 return False
@@ -156,7 +167,7 @@ class SignalPipeline:
             # tuning (multiplier >= low's) extends it to 3.
             periods = 3 if self.sens.warmup_mult >= 1.5 else 2
             return self._seasonal.model_updates >= periods * self._seasonal.L
-        return self.points >= math.ceil(BASE_WARMUP_POINTS * self.sens.warmup_mult)
+        return self.learned_evaluations >= math.ceil(BASE_WARMUP_POINTS * self.sens.warmup_mult)
 
     # ---- evaluation -------------------------------------------------------------
 
@@ -168,9 +179,9 @@ class SignalPipeline:
         self.last_value = value
         self._stalled = False
 
-        self._maybe_resolve_seasonal()
+        self._maybe_resolve()
 
-        # Layer 1: hard limits, live from the first push.
+        # Layer 1: hard limits check every raw push, live from the first one.
         limit_violated = False
         if self._guard is not None:
             limit_violated, bound = self._guard.check(value)
@@ -178,13 +189,19 @@ class SignalPipeline:
                 self._gate.force_anomalous()
                 events.append(self._event("anomaly", value, bound, 1.0, at, Stats(reason="limit")))
 
-        # Layer 2: learned detector; it evaluates per push, or per completed bucket on the
-        # seasonal path, and keeps learning even when the limits layer fired first.
-        evaluation = self._seasonal.update(value) if self._seasonal is not None else self._learned.evaluate(value)
-        if evaluation is not None:
-            self.last_expected = evaluation.expected
-            if evaluation.anomalous:
-                self.last_exceeded_at = at
+        # Layers 2 and 3 run at scoring granularity: per push, or per completed bucket
+        # under the rate guard; they keep learning even when the limits layer fired first.
+        primary, anomalous, lane = None, False, None
+        expected_level = None
+        drift_fired = False
+        bucket = self._bucketer.update(value)
+        if bucket is not None:
+            primary, anomalous, lane = self._evaluate_bucket(bucket, at)
+            expected_level = self._drift.expected
+            drift_fired = self._drift.update(bucket.level) and self._drift.updates >= DRIFT_WARMUP_POINTS
+            if self._trend is not None:
+                self._trend.learn(bucket.level)
+
         if self.ready and not self._ready_announced:
             self._ready_announced = True
             events.append(self._event("ready", value, self.last_expected, 0.0, at, Stats()))
@@ -195,44 +212,103 @@ class SignalPipeline:
         learned_fired = False
         if limit_violated:
             self._gate.observe(True, 1.0)
-        elif evaluation is not None and self.ready:
-            verdict = self._gate.observe(evaluation.anomalous, evaluation.score)
+        elif primary is not None and self.ready:
+            # Dispersion evidence is bursty by nature: spread-driven anomalies must
+            # sustain one gate step longer, so a brief handling burst stays silent.
+            gate_override = raise_gate(self.sens.gate) if lane == "spread" and anomalous else None
+            verdict = self._gate.observe(anomalous, primary.score, gate=gate_override)
             if verdict is not None:
                 learned_fired = verdict == "anomaly"
-                stats = Stats(evaluation.stats, detector=self._learned.detector)
-                events.append(self._event(verdict, value, evaluation.expected, evaluation.score, at, stats))
+                events.append(self._event(verdict, value, primary.expected, primary.score, at, self._lane_stats(primary, lane)))
         elif not self.ready and self._gate.in_anomaly:
             if self._gate.observe(False, 0.0) == "normal":
                 events.append(self._event("normal", value, self.last_expected, 0.0, at, Stats()))
 
-        # Layer 3: drift, always on the raw value stream; an earlier layer's event wins the push.
-        expected_level = self._drift.expected
-        drift_fired = self._drift.update(value) and self.points >= DRIFT_WARMUP_POINTS
+        # Layer 3 events: an earlier layer's event wins the push.
         if drift_fired and not limit_violated and not learned_fired:
             events.append(self._event("drift", value, expected_level, 1.0, at, Stats(detector=self._drift.detector)))
-        self._advance_flush(value, drift_fired)
+        if bucket is not None:
+            self._advance_flush(bucket.level, drift_fired)
         events.extend(self._check_cadence(value, at))
 
-        if self._forecast_runner is not None:
-            if self._trend is not None:
-                self._trend.learn(value)
-            if self.ready:
-                events.extend(self._run_forecast(value, at))
+        if self._forecast_runner is not None and self.ready and bucket is not None:
+            events.extend(self._run_forecast(value, at))
         return events
 
-    def _maybe_resolve_seasonal(self):
-        if self._seasonal is None or self._seasonal.resolved:
+    def _evaluate_bucket(self, bucket: Bucket, at: float):
+        """Judge both faces of the bucket; returns (primary evaluation, anomalous, lane).
+
+        A bucket's mean is only known to +/- its standard error (spread / sqrt(k)), so
+        the level lane scores against it: an oscillation's phase leakage into the mean
+        is not evidence of a level change.
+        """
+        if self._seasonal is not None:
+            evaluation = self._seasonal.update(bucket.level)
+        elif isinstance(self._learned, TrimmedPath) and bucket.spread is not None:
+            evaluation = self._learned.evaluate(bucket.level, uncertainty=bucket.spread / math.sqrt(self._bucketer.k))
+        else:
+            evaluation = self._learned.evaluate(bucket.level)
+        if evaluation is not None:
+            self.learned_evaluations += 1
+            self.last_expected = evaluation.expected
+        spread_eval = None
+        if self._spread_path is not None and bucket.spread is not None:
+            spread_eval = self._spread_path.evaluate(bucket.spread)
+        if evaluation is None and spread_eval is None:
+            return None, False, None
+
+        # The anomalous lane drives reporting; on ties, the higher score does.
+        level_anomalous = evaluation is not None and evaluation.anomalous
+        spread_anomalous = spread_eval is not None and spread_eval.anomalous
+        if spread_anomalous != level_anomalous:
+            primary, lane = (spread_eval, "spread") if spread_anomalous else (evaluation, "level")
+        elif spread_eval is not None and (evaluation is None or spread_eval.score > evaluation.score):
+            primary, lane = spread_eval, "spread"
+        else:
+            primary, lane = evaluation, "level"
+        anomalous = level_anomalous or spread_anomalous
+        if anomalous:
+            self.last_exceeded_at = at
+        return primary, anomalous, (lane if self._spread_path is not None else None)
+
+    def _lane_stats(self, primary, lane: str | None) -> Stats:
+        detector = self._spread_path.detector if lane == "spread" else self._learned.detector
+        stats = Stats(primary.stats, detector=detector)
+        if lane is not None:
+            stats["lane"] = lane
+        if self.bucket_size_s is not None:
+            stats["bucket_size"] = self.bucket_size_s
+        return stats
+
+    def _maybe_resolve(self):
+        """Fix the scoring granularity once the cadence is measured: rate guard, then L."""
+        if self._bucketer.resolved or self.points < CADENCE_RESOLUTION_POINTS:
             return
         median_iat = self.cadence.median_iat
-        if self.points < CADENCE_RESOLUTION_POINTS or median_iat is None:
+        if median_iat is None:
             return
-        self._seasonal.resolve(median_iat)
-        if self._seasonal.guard_tripped:
+        self._bucketer.resolve(median_iat)
+        if self._bucketer.active:
+            # No protection: bucket spreads are legitimately bimodal (quiet vs active),
+            # and the upper mode must be learnable or it stays anomalous forever.
+            self._spread_path = TrimmedPath(self.sens.quantile, protect=False)
+            if self._seasonal is not None:
+                self._seasonal.reset_buffer()
             logger.warning(
-                f"'{self.metric}': sampling ~{median_iat:.3g}s with period={self.intent['period']!r} -> seasonal scoring on "
-                f"{self._seasonal.bucket_size_s:.3g}s averages; spikes shorter than ~{self._seasonal.bucket_size_s:.3g}s may be "
-                f"smoothed out. Hard limits and push rate are unaffected."
+                f"'{self.metric}': sampling ~{median_iat * 1000:.3g}ms -> scoring on {self._bucketer.bucket_size_s:.3g}s buckets "
+                f"(level + spread); learned events reflect sustained behavior, not single samples. "
+                f"Hard limits still check every push."
             )
+        if self._seasonal is not None:
+            self._seasonal.resolve(self._bucketer.bucket_size_s or median_iat)
+            if self._seasonal.guard_tripped:
+                logger.warning(
+                    f"'{self.metric}': sampling ~{median_iat:.3g}s with period={self.intent['period']!r} -> seasonal scoring on "
+                    f"{self._seasonal.bucket_size_s:.3g}s averages; spikes shorter than ~{self._seasonal.bucket_size_s:.3g}s may be "
+                    f"smoothed out. Hard limits and push rate are unaffected."
+                )
+        if self._bucketer.active or self._seasonal is not None:
+            self._iat_fixed = median_iat
 
     def _advance_flush(self, value: float, drift_fired: bool):
         """Flush the learned window after a drift alarm, but only once the shift is confirmed.
@@ -255,11 +331,11 @@ class SignalPipeline:
         pending, self._pending_flush = self._pending_flush, None
         if abs(statistics.median(recent) - pending["mu"]) > FLUSH_CONFIRM_SIGMAS * pending["sigma"]:
             self._learned.flush()
+            if self._spread_path is not None:
+                self._spread_path.flush()
 
     def _check_cadence(self, value: float, at: float) -> list[AnomalyEvent]:
-        if self._seasonal is None or not self._seasonal.resolved:
-            return []
-        ewma, fixed = self.cadence.ewma_iat, self._seasonal.iat_at_resolution
+        ewma, fixed = self.cadence.ewma_iat, self._iat_fixed
         if not ewma or not fixed:
             return []
         drifted = ewma > 2 * fixed or ewma < fixed / 2
@@ -271,12 +347,8 @@ class SignalPipeline:
         return []
 
     def _run_forecast(self, value: float, at: float) -> list[AnomalyEvent]:
-        if self._seasonal is not None:
-            step_s = self._seasonal.bucket_size_s or self.cadence.median_iat
-            source = self._seasonal
-        else:
-            step_s = self.cadence.median_iat
-            source = self._trend
+        source = self._seasonal if self._seasonal is not None else self._trend
+        step_s = self.bucket_size_s or self.cadence.median_iat
         steps = self._forecast_runner.horizon_steps(step_s)
         breach = self._forecast_runner.evaluate(source.forecast(steps), step_s, self._guard)
         if breach is None:
@@ -303,7 +375,10 @@ class SignalPipeline:
 
     @property
     def bucket_size_s(self) -> float | None:
-        return self._seasonal.bucket_size_s if self._seasonal is not None else None
+        """Effective learned-scoring granularity in seconds, None when scoring raw pushes."""
+        if self._seasonal is not None and self._seasonal.bucket_size_s is not None:
+            return self._seasonal.bucket_size_s
+        return self._bucketer.bucket_size_s
 
     @property
     def detector(self):
