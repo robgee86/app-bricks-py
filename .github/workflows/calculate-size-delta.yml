@@ -66,6 +66,7 @@ jobs:
       - name: Build the base Docker image
         uses: docker/bake-action@v7
         with:
+          source: .
           targets: python-base
           push: true
           set: |
@@ -78,6 +79,7 @@ jobs:
       - name: Build the apps base Docker image
         uses: docker/bake-action@v7
         with:
+          source: .
           targets: python-apps-base
           push: true
           set: |
