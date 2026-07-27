@@ -40,12 +40,12 @@ class ByoPath:
     """
 
     def __init__(self, detector, quantile: float):
-        from river import anomaly
+        from .detectors import quantile_filter
 
         if hasattr(detector, "classify"):
             self._filter = detector
         else:
-            self._filter = anomaly.QuantileFilter(detector, q=quantile)
+            self._filter = quantile_filter(detector, quantile)
 
     def evaluate(self, value: float):
         from .detectors import Evaluation
@@ -72,7 +72,7 @@ class SignalPipeline:
         self,
         metric: str,
         *,
-        sensitivity: str = "medium",
+        sensitivity="medium",
         period: str | None = None,
         limits: tuple | None = None,
         bucket="auto",
@@ -152,7 +152,9 @@ class SignalPipeline:
         if self._seasonal is not None:
             if not self._seasonal.resolved:
                 return False
-            periods = 3 if self.sensitivity == "low" else 2
+            # M_sens never shortens the seasonal warm-up below 2 periods; low-style
+            # tuning (multiplier >= low's) extends it to 3.
+            periods = 3 if self.sens.warmup_mult >= 1.5 else 2
             return self._seasonal.model_updates >= periods * self._seasonal.L
         return self.points >= math.ceil(BASE_WARMUP_POINTS * self.sens.warmup_mult)
 

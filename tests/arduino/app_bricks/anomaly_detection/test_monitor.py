@@ -168,9 +168,14 @@ def test_glitchy_feed_does_not_inflate_the_band():
         glitch = random.choice([-20.0, 20.0]) if random.random() < 0.03 else 0.0
         monitor.push(50 + random.gauss(0, 1) + glitch, at=T0 + index)
         end = index + 1
-    monitor.push(56.0, at=T0 + end)  # 6 sigma, modest next to the glitches
+    # Once the glitch burst leaves the rolling cutoff window, a 6-sigma point
+    # still stands out: the trimmed band did not absorb the glitches.
+    end = feed_gaussian(monitor, 500, start=end)
+    monitor.push(56.0, at=T0 + end)
     monitor.push(56.0, at=T0 + end + 1)
-    assert any(event.value == 56.0 for event in fired)
+    spikes = [event for event in fired if event.value == 56.0]
+    assert spikes
+    assert 48 < spikes[0].expected < 52
 
 
 def test_quantized_feed_stays_quiet_but_catches_real_jumps(recorder):
@@ -380,6 +385,48 @@ def test_stats_surface():
     assert stats.points == 1
     assert stats.limits == (0, 90)
     assert stats.detector is not None
+
+
+def test_cutoff_recovers_after_anomaly_bursts():
+    monitor = AnomalyDetection("x", persist=False)
+    fired = []
+    monitor.on_anomaly(fired.append)
+    end = feed_gaussian(monitor, 300)
+    # Heavy anomaly cycles push the rolling cutoff toward 1.0...
+    for _ in range(5):
+        for _ in range(3):
+            monitor.push(65.0, at=T0 + end)
+            end += 1
+        end = feed_gaussian(monitor, 20, start=end)
+    # ...but it must recover once the bursts leave the cutoff window: a moderate
+    # 3.2-sigma anomaly fires again after enough normal traffic.
+    end = feed_gaussian(monitor, 600, start=end)
+    before = len(fired)
+    monitor.push(53.4, at=T0 + end)
+    monitor.push(53.4, at=T0 + end + 1)
+    assert len(fired) > before, "a past anomaly burst must not permanently raise the bar"
+
+
+def test_sensitivity_accepts_tolerance_dict():
+    # gate (1,1): a single spike fires without needing 2-of-3.
+    monitor = AnomalyDetection("x", sensitivity={"gate": (1, 1), "score_floor": 0.7}, persist=False)
+    fired = []
+    monitor.on_anomaly(fired.append)
+    end = feed_gaussian(monitor, 150)  # unspecified keys keep medium's values (warm-up 120)
+    assert monitor.ready
+    monitor.push(65.0, at=T0 + end)
+    assert len(fired) == 1
+
+
+def test_sensitivity_dict_validation():
+    with pytest.raises(ValueError, match="unknown key.*quantille"):
+        AnomalyDetection("x", sensitivity={"quantille": 0.99}, persist=False)
+    with pytest.raises(ValueError, match="gate"):
+        AnomalyDetection("x", sensitivity={"gate": (3, 1)}, persist=False)
+    with pytest.raises(ValueError, match="quantile"):
+        AnomalyDetection("x", sensitivity={"quantile": 1.5}, persist=False)
+    with pytest.raises(ValueError, match="score_floor"):
+        AnomalyDetection("x", sensitivity={"score_floor": 1.0}, persist=False)
 
 
 def test_adwin_drift_swap():

@@ -9,6 +9,7 @@ import statistics
 import threading
 import time
 from collections import deque
+from dataclasses import astuple
 
 from river import anomaly, drift, linear_model, optim, stats as river_stats
 
@@ -28,6 +29,7 @@ from .config import (
     reject_group_kwarg_array,
     resolve_sensitivity,
 )
+from .detectors import CUTOFF_WINDOW, quantile_filter
 from .events import AnomalyEvent, CallbackRegistry, EpisodeGate, Stats
 from .persistence import load_state, save_state
 from .pipeline import SignalPipeline
@@ -70,11 +72,11 @@ class _JointWatcher:
 
     def __init__(self, signals: list[str], quantile: float):
         hst = anomaly.HalfSpaceTrees(n_trees=10, height=8, window_size=250, limits={s: (0.0, 1.0) for s in signals}, seed=42)
-        self._filter = anomaly.QuantileFilter(hst, q=quantile)
+        self._filter = quantile_filter(hst, quantile)
         self._scores = deque(maxlen=250)
 
     def set_quantile(self, quantile: float):
-        self._filter.quantile = river_stats.Quantile(q=quantile)
+        self._filter.quantile = river_stats.RollingQuantile(q=quantile, window_size=CUTOFF_WINDOW)
 
     def evaluate(self, scaled: dict) -> tuple[float, bool]:
         """Returns (score min-max normalized over the recent window, anomalous)."""
@@ -272,9 +274,10 @@ class AnomalyDetectionGroup:
         self._evaluate_intent = evaluate
         self._eval_mode, self._eval_arg = self._parse_evaluate(evaluate)
 
-        # sensitivity special rule: scalar tunes members and the joint score; an array
-        # tunes members per element and the joint score stays at "medium".
-        joint_sens_name = sensitivity if isinstance(sensitivity, str) else "medium"
+        # sensitivity special rule: a scalar (name or pro dict) tunes members and the
+        # joint score; an array tunes members per element and the joint score stays at
+        # "medium".
+        joint_sens_name = "medium" if isinstance(sensitivity, list) else sensitivity
         member_sens = broadcast_member_kwarg("sensitivity", sensitivity, self.signals, "medium")
         member_period = broadcast_member_kwarg("period", period, self.signals, None)
         reject_flattened_limits("limits", limits)
@@ -617,7 +620,8 @@ class AnomalyDetectionGroup:
         fields = {
             "watch": self.watch,
             "evaluate": self._evaluate_intent,
-            "joint_sensitivity": self._joint_sens_name,
+            # The resolved internals, not the intent value: deterministic for dicts too.
+            "joint_sensitivity": astuple(self._joint_sens),
             "signals": tuple(self.signals),
         }
         for signal, member in self._members.items():

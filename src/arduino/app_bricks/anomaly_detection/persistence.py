@@ -13,7 +13,7 @@ from pathlib import Path
 from .events import logger
 
 STATE_DIR_ENV = "ANOMALY_DETECTION_STATE_DIR"
-DEFAULT_STATE_DIR = "~/.arduino-bricks/anomaly_detection"
+DEFAULT_STATE_DIR = "./data/anomaly_detection"
 
 
 def state_path(name: str) -> Path:

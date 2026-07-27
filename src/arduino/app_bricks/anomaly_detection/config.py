@@ -6,7 +6,7 @@
 
 import hashlib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, replace
 
 SENSITIVITIES = ("low", "medium", "high")
 
@@ -77,11 +77,37 @@ def parse_duration(value: str, kwarg: str) -> float:
     return seconds
 
 
-def resolve_sensitivity(value: str, kwarg: str = "sensitivity") -> Sensitivity:
-    """Look a sensitivity name up in the fan-out table."""
+def resolve_sensitivity(value, kwarg: str = "sensitivity") -> Sensitivity:
+    """Resolve a sensitivity name, or a pro dict of internal tolerances.
+
+    A dict sets individual internals directly (quantile, gate, hysteresis, warmup_mult,
+    ph_threshold, score_floor); unspecified keys keep "medium"'s values.
+    """
+    if isinstance(value, dict):
+        return _resolve_sensitivity_overrides(value, kwarg)
     if value not in SENSITIVITY_TABLE:
-        raise ValueError(f"{kwarg}={value!r}: must be one of {', '.join(SENSITIVITIES)}")
+        raise ValueError(f"{kwarg}={value!r}: must be one of {', '.join(SENSITIVITIES)}, or a dict of internal tolerances")
     return SENSITIVITY_TABLE[value]
+
+
+def _resolve_sensitivity_overrides(overrides: dict, kwarg: str) -> Sensitivity:
+    known = {field.name for field in fields(Sensitivity)}
+    unknown = set(overrides) - known
+    if unknown:
+        raise ValueError(f"{kwarg}: unknown key(s) {', '.join(sorted(unknown))}; valid keys: {', '.join(sorted(known))}")
+    resolved = replace(SENSITIVITY_TABLE["medium"], **overrides)
+    if not 0.5 < resolved.quantile < 1.0:
+        raise ValueError(f"{kwarg}: quantile must be between 0.5 and 1.0 (exclusive)")
+    gate = resolved.gate
+    if not (isinstance(gate, tuple) and len(gate) == 2 and all(isinstance(g, int) for g in gate) and 1 <= gate[0] <= gate[1]):
+        raise ValueError(f"{kwarg}: gate must be an (x, y) tuple of ints with 1 <= x <= y (fire on x of the last y evaluations)")
+    if not (isinstance(resolved.hysteresis, int) and resolved.hysteresis >= 1):
+        raise ValueError(f"{kwarg}: hysteresis must be an int >= 1")
+    if resolved.warmup_mult <= 0 or resolved.ph_threshold <= 0:
+        raise ValueError(f"{kwarg}: warmup_mult and ph_threshold must be positive")
+    if not 0.0 <= resolved.score_floor < 1.0:
+        raise ValueError(f"{kwarg}: score_floor must be in [0.0, 1.0)")
+    return resolved
 
 
 def raise_gate(gate: tuple[int, int]) -> tuple[int, int]:

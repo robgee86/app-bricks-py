@@ -9,7 +9,7 @@ import statistics
 from collections import deque
 from dataclasses import dataclass
 
-from river import anomaly, drift, time_series
+from river import anomaly, drift, stats as river_stats, time_series
 
 from .config import MAX_SEASONAL_LENGTH, TARGET_SEASONAL_LENGTH
 
@@ -22,6 +22,17 @@ HW_ALPHA, HW_BETA, HW_GAMMA = 0.3, 0.1, 0.6
 TRIM_WINDOW = 500
 TRIM_ALPHA = 0.10
 SCORER_GRACE = 30
+# The QuantileFilter cutoff is estimated over a rolling score window: past anomaly
+# bursts stop raising the bar once they leave it (an unbounded quantile ratchets toward
+# 1.0 under repeated anomalies and never readmits moderate ones).
+CUTOFF_WINDOW = 500
+
+
+def quantile_filter(scorer, quantile: float) -> anomaly.QuantileFilter:
+    """A QuantileFilter whose cutoff has bounded memory (rolling quantile)."""
+    filter_ = anomaly.QuantileFilter(scorer, q=quantile)
+    filter_.quantile = river_stats.RollingQuantile(q=quantile, window_size=CUTOFF_WINDOW)
+    return filter_
 
 
 def _trim_correction(alpha: float) -> float:
@@ -153,7 +164,7 @@ class TrimmedPath:
 
     def __init__(self, quantile: float):
         self._scorer = TrimmedScorer()
-        self._filter = anomaly.QuantileFilter(self._scorer, q=quantile)
+        self._filter = quantile_filter(self._scorer, quantile)
 
     def evaluate(self, value: float) -> Evaluation:
         self._scorer.observe(value)
@@ -190,7 +201,7 @@ class SeasonalPath:
         self._quantile = quantile
         self._model = None
         self._residual_scorer = TrimmedScorer(grace_period=10)
-        self._residual_filter = anomaly.QuantileFilter(self._residual_scorer, q=quantile)
+        self._residual_filter = quantile_filter(self._residual_scorer, quantile)
         self._prebuffer = []
         self._bucket_acc = []
         self.k = 1  # pushes per bucket

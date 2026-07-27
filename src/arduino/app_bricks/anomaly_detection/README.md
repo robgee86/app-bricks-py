@@ -85,6 +85,6 @@ warm-up. If the cadence later changes by more than 2x, `on_drift` fires with
 `stats.reason="cadence_change"` and the seasonal model keeps running against the old
 calibration: restart the app to re-calibrate (fresh cadence measurement).
 
-Persistence is on by default (`persist=False` opts out); changing the configuration
-intentionally invalidates saved state so a model is never scored against assumptions
-it was not fitted under.
+Persistence is on by default (`persist=False` opts out), storing model state under
+`./data/anomaly_detection/`; changing the configuration intentionally invalidates saved
+state so a model is never scored against assumptions it was not fitted under.
