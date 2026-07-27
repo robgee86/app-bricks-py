@@ -80,7 +80,7 @@ def parse_duration(value: str, kwarg: str) -> float:
 def resolve_sensitivity(value, kwarg: str = "sensitivity") -> Sensitivity:
     """Resolve a sensitivity name, or a pro dict of internal tolerances.
 
-    A dict sets individual internals directly (quantile, gate, hysteresis, warmup_mult,
+    A dict overrides individual internals (quantile, gate, hysteresis, warmup_mult,
     ph_threshold, score_floor); unspecified keys keep "medium"'s values.
     """
     if isinstance(value, dict):

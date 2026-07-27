@@ -408,11 +408,11 @@ def test_cutoff_recovers_after_anomaly_bursts():
 
 
 def test_sensitivity_accepts_tolerance_dict():
-    # gate (1,1): a single spike fires without needing 2-of-3.
+    # gate (1,1): a single spike fires without needing 2-of-3; other keys keep medium.
     monitor = AnomalyDetection("x", sensitivity={"gate": (1, 1), "score_floor": 0.7}, persist=False)
     fired = []
     monitor.on_anomaly(fired.append)
-    end = feed_gaussian(monitor, 150)  # unspecified keys keep medium's values (warm-up 120)
+    end = feed_gaussian(monitor, 150)  # medium warm-up: ready after 120
     assert monitor.ready
     monitor.push(65.0, at=T0 + end)
     assert len(fired) == 1

@@ -48,9 +48,11 @@ class AnomalyDetection:
         Args:
             name (str): Signal name, used in events and as the persistence key.
             sensitivity: "low", "medium" or "high"; tunes every internal tolerance,
-                never which detector runs. Pro: a dict sets individual tolerances
-                (quantile, gate, hysteresis, warmup_mult, ph_threshold, score_floor);
-                unspecified keys keep "medium"'s values.
+                never which detector runs. Pro: a dict overrides individual tolerances;
+                unspecified keys keep "medium"'s values: quantile=0.995 (score cutoff),
+                gate=(2, 3) (fire on X of last Y evaluations), hysteresis=3 (normal
+                points to recover), warmup_mult=1.0, ph_threshold=30.0 (drift lane),
+                score_floor=0.80 (weaker events are not emitted).
             period (str): Declared seasonality (e.g. "1d") for signals that repeat.
             limits (tuple): Hard (lo, hi) safety bounds, active from the first push;
                 one side may be None.
