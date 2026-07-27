@@ -140,6 +140,7 @@ class SignalPipeline:
         self.warmup_override = None
         self._bucketer = RateBucketer()
         self._spread_path = None  # created if the rate guard trips
+        self._centroid_path = None  # created if the rate guard trips with enough samples per bucket
         self._iat_fixed = None  # raw cadence a resolved granularity was derived from
         self._ready_announced = False
         self._cadence_flagged = False
@@ -213,9 +214,10 @@ class SignalPipeline:
         if limit_violated:
             self._gate.observe(True, 1.0)
         elif primary is not None and self.ready:
-            # Dispersion evidence is bursty by nature: spread-driven anomalies must
-            # sustain one gate step longer, so a brief handling burst stays silent.
-            gate_override = raise_gate(self.sens.gate) if lane == "spread" and anomalous else None
+            # Dispersion and pitch evidence is bursty by nature: anomalies driven by
+            # those lanes must sustain one gate step longer, so a brief handling burst
+            # stays silent.
+            gate_override = raise_gate(self.sens.gate) if lane in ("spread", "spectrum") and anomalous else None
             verdict = self._gate.observe(anomalous, primary.score, gate=gate_override)
             if verdict is not None:
                 learned_fired = verdict == "anomaly"
@@ -251,28 +253,25 @@ class SignalPipeline:
         if evaluation is not None:
             self.learned_evaluations += 1
             self.last_expected = evaluation.expected
-        spread_eval = None
+        lanes = [(evaluation, "level")] if evaluation is not None else []
         if self._spread_path is not None and bucket.spread is not None:
-            spread_eval = self._spread_path.evaluate(bucket.spread)
-        if evaluation is None and spread_eval is None:
+            lanes.append((self._spread_path.evaluate(bucket.spread), "spread"))
+        if self._centroid_path is not None and bucket.centroid is not None:
+            lanes.append((self._centroid_path.evaluate(bucket.centroid), "spectrum"))
+        if not lanes:
             return None, False, None
 
         # The anomalous lane drives reporting; on ties, the higher score does.
-        level_anomalous = evaluation is not None and evaluation.anomalous
-        spread_anomalous = spread_eval is not None and spread_eval.anomalous
-        if spread_anomalous != level_anomalous:
-            primary, lane = (spread_eval, "spread") if spread_anomalous else (evaluation, "level")
-        elif spread_eval is not None and (evaluation is None or spread_eval.score > evaluation.score):
-            primary, lane = spread_eval, "spread"
-        else:
-            primary, lane = evaluation, "level"
-        anomalous = level_anomalous or spread_anomalous
+        anomalous_lanes = [entry for entry in lanes if entry[0].anomalous]
+        primary, lane = max(anomalous_lanes or lanes, key=lambda entry: entry[0].score)
+        anomalous = bool(anomalous_lanes)
         if anomalous:
             self.last_exceeded_at = at
         return primary, anomalous, (lane if self._spread_path is not None else None)
 
     def _lane_stats(self, primary, lane: str | None) -> Stats:
-        detector = self._spread_path.detector if lane == "spread" else self._learned.detector
+        paths = {"spread": self._spread_path, "spectrum": self._centroid_path}
+        detector = (paths.get(lane) or self._learned).detector
         stats = Stats(primary.stats, detector=detector)
         if lane is not None:
             stats["lane"] = lane
@@ -289,14 +288,16 @@ class SignalPipeline:
             return
         self._bucketer.resolve(median_iat)
         if self._bucketer.active:
-            # No protection: bucket spreads are legitimately bimodal (quiet vs active),
-            # and the upper mode must be learnable or it stays anomalous forever.
+            # No protection: bucket spreads and centroids are legitimately bimodal
+            # (quiet vs active), and both modes must be learnable or ordinary activity
+            # stays anomalous forever.
             self._spread_path = TrimmedPath(self.sens.quantile, protect=False)
+            self._centroid_path = TrimmedPath(self.sens.quantile, protect=False)
             if self._seasonal is not None:
                 self._seasonal.reset_buffer()
             logger.warning(
                 f"'{self.metric}': sampling ~{median_iat * 1000:.3g}ms -> scoring on {self._bucketer.bucket_size_s:.3g}s buckets "
-                f"(level + spread); learned events reflect sustained behavior, not single samples. "
+                f"(level + spread + pitch); learned events reflect sustained behavior, not single samples. "
                 f"Hard limits still check every push."
             )
         if self._seasonal is not None:
@@ -331,8 +332,9 @@ class SignalPipeline:
         pending, self._pending_flush = self._pending_flush, None
         if abs(statistics.median(recent) - pending["mu"]) > FLUSH_CONFIRM_SIGMAS * pending["sigma"]:
             self._learned.flush()
-            if self._spread_path is not None:
-                self._spread_path.flush()
+            for path in (self._spread_path, self._centroid_path):
+                if path is not None:
+                    path.flush()
 
     def _check_cadence(self, value: float, at: float) -> list[AnomalyEvent]:
         ewma, fixed = self.cadence.ewma_iat, self._iat_fixed

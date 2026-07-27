@@ -73,6 +73,7 @@ mood_detector = [
 ]
 anomaly_detection = [
     "river==0.25.*",
+    "numpy",
 ]
 stream = [
     "websockets",

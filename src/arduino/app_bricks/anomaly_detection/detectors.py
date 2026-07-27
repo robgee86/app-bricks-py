@@ -9,6 +9,7 @@ import statistics
 from collections import deque
 from dataclasses import dataclass
 
+import numpy as np
 from river import anomaly, drift, stats as river_stats, time_series
 
 from .config import MAX_SEASONAL_LENGTH, RATE_BUCKET_TARGET_S, RATE_GUARD_IAT_S, TARGET_SEASONAL_LENGTH
@@ -98,16 +99,29 @@ class Evaluation:
     stats: dict
 
 
+# The spectral window: enough bins to tell a tone from noise reliably. At high rates one
+# bucket already holds this many samples; at low rates the window spans several buckets
+# (finer frequency resolution, slower pitch response - the right trade for slow feeds).
+SPECTRAL_WINDOW = 64
+# Tonality gate: a pure tone concentrates >= ~40% of deviation energy in one bin even
+# when straddling two (Hann-windowed); a flat noise spectrum concentrates a few percent.
+# Noise has no pitch: without this gate, noise centroids from quiet periods widen the
+# learned pitch band until real frequency shifts are camouflaged.
+TONALITY_MIN_SHARE = 0.35
+
+
 @dataclass(frozen=True)
 class Bucket:
     """One scoring unit: a raw push, or an aggregate of them under the rate guard.
 
     High-rate kinematic signals put activity in the variance, not the level (the mean of
-    an oscillation is ~0), so a bucket carries both faces of its samples.
+    an oscillation is ~0), so a bucket carries all three faces of its samples: where it
+    sits (level), how much it wiggles (spread), at what pitch it wiggles (centroid).
     """
 
     level: float
     spread: float | None  # None when the bucket is a single raw push
+    centroid: float | None = None  # Hz; None when the bucket has no spectral opinion
 
 
 class RateBucketer:
@@ -121,12 +135,14 @@ class RateBucketer:
         self.bucket_size_s = None
         self.resolved = False
         self._acc = []
+        self._spectral_buffer = None  # rolling raw samples for the pitch lane
 
     def resolve(self, median_iat: float):
         self.resolved = True
         if median_iat < RATE_GUARD_IAT_S:
             self.k = max(2, round(RATE_BUCKET_TARGET_S / median_iat))
             self.bucket_size_s = round(self.k * median_iat, 3)
+            self._spectral_buffer = deque(maxlen=max(SPECTRAL_WINDOW, self.k))
 
     @property
     def active(self) -> bool:
@@ -137,12 +153,36 @@ class RateBucketer:
         if not self.active:
             return Bucket(level=value, spread=None)
         self._acc.append(value)
+        self._spectral_buffer.append(value)
         if len(self._acc) < self.k:
             return None
-        mean = sum(self._acc) / len(self._acc)
-        variance = sum((v - mean) ** 2 for v in self._acc) / len(self._acc)
-        self._acc = []
-        return Bucket(level=mean, spread=math.sqrt(max(variance, 0.0)))
+        samples, self._acc = self._acc, []
+        mean = sum(samples) / len(samples)
+        variance = sum((v - mean) ** 2 for v in samples) / len(samples)
+        return Bucket(level=mean, spread=math.sqrt(max(variance, 0.0)), centroid=self._centroid())
+
+    def _centroid(self) -> float | None:
+        """Energy-weighted average frequency (Hz) of the spectral window's deviations.
+
+        No spectral opinion without a discernible tone: quantization toggling and
+        non-tonal windows (noise) return None. This keeps the lane structurally silent
+        on oversampled slow/quantized feeds and keeps noise centroids from poisoning the
+        learned pitch band on feeds with quiet periods.
+        """
+        window = self._spectral_buffer
+        if len(window) < window.maxlen:
+            return None
+        samples = np.asarray(window)
+        if len(set(window)) <= 3:
+            return None
+        deviations = (samples - samples.mean()) * np.hanning(len(samples))
+        energy = np.abs(np.fft.rfft(deviations))[1:] ** 2  # drop DC
+        total = float(energy.sum())
+        if total <= 0.0 or float(energy.max()) / total < TONALITY_MIN_SHARE:
+            return None
+        duration_s = len(samples) * self.bucket_size_s / self.k
+        frequencies = np.arange(1, len(energy) + 1) / duration_s
+        return float((frequencies * energy).sum() / total)
 
 
 class TrimmedScorer(anomaly.base.SupervisedAnomalyDetector):

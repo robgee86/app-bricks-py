@@ -257,6 +257,50 @@ def test_gyro_handling_is_normal_but_sustained_vibration_fires(recorder):
     assert fired[-1].stats.bucket_size == pytest.approx(1.0, rel=0.05)
 
 
+def test_frequency_shift_at_constant_amplitude_fires_spectrum_lane(recorder):
+    import math
+
+    # 10 Hz on purpose: the spectral window spans several buckets at low rates, so the
+    # pitch lane must work across the whole rate-guarded range, not just fast feeds.
+    hz, t = 10.0, 0.0
+    monitor = AnomalyDetection("motor", persist=False)
+    recorder.attach(monitor)
+
+    def push_seconds(seconds, freq):
+        nonlocal t
+        for _ in range(int(seconds * hz)):
+            monitor.push(math.sin(2 * math.pi * freq * t) + random.gauss(0, 0.02), at=T0 + t)
+            t += 1.0 / hz
+
+    push_seconds(180, freq=1.0)  # steady 1 Hz vibration: the normal hum
+    assert monitor.ready
+    baseline = len(recorder.of_kind("anomaly"))
+
+    push_seconds(20, freq=4.0)  # same amplitude, four times the pitch
+    fired = recorder.of_kind("anomaly")[baseline:]
+    assert fired, "a frequency shift at constant energy must fire"
+    assert fired[0].stats.lane == "spectrum"
+    assert 0.5 < fired[0].expected < 2.0, "expected pitch is the learned ~1 Hz"
+
+
+def test_oversampled_noise_and_quantized_feeds_stay_silent(recorder):
+    # Oversampled continuous noise (e.g. a temperature sensor read at 10 Hz):
+    # the centroid of noise is stationary, so the spectrum lane must never speak.
+    noisy = AnomalyDetection("temp_fast", persist=False)
+    recorder.attach(noisy)
+    for index in range(3000):
+        noisy.push(22.0 + random.gauss(0, 0.05), at=T0 + index * 0.1)
+    assert recorder.of_kind("anomaly") == []
+
+    # Oversampled quantized feed: degenerate buckets carry no spectral opinion.
+    quantized = AnomalyDetection("temp_quantized", persist=False)
+    fired = []
+    quantized.on_anomaly(fired.append)
+    for index in range(3000):
+        quantized.push(float(round(random.gauss(22, 0.3))), at=T0 + index * 0.1)
+    assert fired == []
+
+
 # ---- drift -------------------------------------------------------------------------
 
 
