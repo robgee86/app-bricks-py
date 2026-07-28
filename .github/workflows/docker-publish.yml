@@ -33,8 +33,7 @@ jobs:
       tag_prefix: ${{ steps.detect.outputs.tag_prefix }}
       version: ${{ steps.detect.outputs.version }}
       prerelease: ${{ steps.detect.outputs.prerelease }}
-      base_containers: ${{ steps.detect.outputs.base_containers }}
-      downstream_containers: ${{ steps.detect.outputs.downstream_containers }}
+      containers: ${{ steps.detect.outputs.containers }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -66,17 +65,14 @@ jobs:
           echo "Matching containers: ${MATCHING:-none}"
 
           if [[ -z "$MATCHING" ]]; then
-            echo "base_containers=[]" >> $GITHUB_OUTPUT
-            echo "downstream_containers=[]" >> $GITHUB_OUTPUT
+            echo "containers=[]" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          # Split into build waves, adding the containers deriving from the matching ones
-          WAVES=$(python3 scripts/container_deps.py waves $MATCHING)
-          echo "Base containers: $(echo "$WAVES" | jq -r '.base | join(" ")')"
-          echo "Downstream containers: $(echo "$WAVES" | jq -r '.downstream | join(" ")')"
-          echo "base_containers=$(echo "$WAVES" | jq -c .base)" >> $GITHUB_OUTPUT
-          echo "downstream_containers=$(echo "$WAVES" | jq -c .downstream)" >> $GITHUB_OUTPUT
+          # Widen with the containers deriving from the matching ones
+          CONTAINERS=$(python3 scripts/container_deps.py closure $MATCHING)
+          echo "Containers: $(echo "$CONTAINERS" | jq -r 'join(" ")')"
+          echo "containers=$CONTAINERS" >> $GITHUB_OUTPUT
 
   upload-whl:
     runs-on: ubuntu-24.04-arm
@@ -125,16 +121,10 @@ jobs:
   build:
     runs-on: ubuntu-24.04-arm
     needs: [detect, upload-whl]
-    if: needs.detect.outputs.base_containers != '[]'
-    strategy:
-      fail-fast: false
-      matrix:
-        container: ${{ fromJson(needs.detect.outputs.base_containers) }}
+    if: needs.detect.outputs.containers != '[]'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
 
       - name: Log into registry ${{ env.GHCR_REGISTRY }}
         uses: docker/login-action@v4
@@ -143,117 +133,14 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Check if rebuild required
-        id: rebuild_check
-        run: |
-          TAG_PREFIX="${{ needs.detect.outputs.tag_prefix }}"
-          CURRENT_TAG="${TAG_PREFIX}/${{ needs.detect.outputs.version }}"
-          git fetch --tags
-          PREV_TAG=$(git tag --sort=-version:refname | grep "^${TAG_PREFIX}/" | grep -v "^${CURRENT_TAG}$" | head -1)
-
-          # The container sources are its bake contexts; the wheel context is built
-          # from the Python sources, so watch those instead of the untracked dist/
-          WATCH_PATHS=$(docker buildx bake --print "${{ matrix.container }}" 2>/dev/null | jq -r '
-            .target["${{ matrix.container }}"]
-            | [.context] + [(.contexts // {} | to_entries[] | if .key == "wheel" then "src/ pyproject.toml Taskfile.dist.yml" else .value end)]
-            | join(" ")')
-          echo "Watch paths: $WATCH_PATHS"
-
-          if [[ -z "$PREV_TAG" ]]; then
-            echo "No previous tag found for ${{ matrix.container }} — full build required"
-            echo "needs_build=true" >> $GITHUB_OUTPUT
-            echo "prev_version=" >> $GITHUB_OUTPUT
-          else
-            PREV_VERSION="${PREV_TAG#${TAG_PREFIX}/}"
-            echo "prev_version=$PREV_VERSION" >> $GITHUB_OUTPUT
-            CHANGED=$(git diff --name-only "$PREV_TAG" HEAD -- $WATCH_PATHS)
-            if [[ -n "$CHANGED" ]]; then
-              echo "Sources changed since $PREV_TAG — full build required"
-              echo "$CHANGED"
-              echo "needs_build=true" >> $GITHUB_OUTPUT
-            elif ! docker buildx imagetools inspect ${{ env.GHCR_DESTINATION_ORG }}/app-bricks/${{ matrix.container }}:${PREV_VERSION} > /dev/null 2>&1; then
-              echo "Previous image ${PREV_VERSION} not found in registry — full build required"
-              echo "needs_build=true" >> $GITHUB_OUTPUT
-            else
-              echo "No source changes and previous image exists — will re-tag from ${PREV_VERSION}"
-              echo "needs_build=false" >> $GITHUB_OUTPUT
-            fi
-          fi
-
-      - name: Re-tag image
-        if: steps.rebuild_check.outputs.needs_build == 'false'
-        run: |
-          echo "Re-tagging ${{ matrix.container }} from ${{ steps.rebuild_check.outputs.prev_version }} to ${{ needs.detect.outputs.version }}"
-          docker buildx imagetools create \
-            --tag ${{ env.GHCR_DESTINATION_ORG }}/app-bricks/${{ matrix.container }}:${{ needs.detect.outputs.version }} \
-            ${{ env.GHCR_DESTINATION_ORG }}/app-bricks/${{ matrix.container }}:${{ steps.rebuild_check.outputs.prev_version }}
-
-      - name: Build and publish container
-        if: steps.rebuild_check.outputs.needs_build == 'true'
-        uses: ./.github/actions/build-container
-        with:
-          container: ${{ matrix.container }}
-          registry: ${{ env.GHCR_DESTINATION_ORG }}/
-          version: ${{ needs.detect.outputs.version }}
-          tags: type=raw,value=${{ needs.detect.outputs.version }}
-          cache-tag: release-buildcache
-          registry-host: ${{ env.GHCR_REGISTRY }}
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: SBOM Delta
-        uses: ./.github/actions/sbom-delta
-        with:
-          container: ${{ matrix.container }}
-          version: ${{ needs.detect.outputs.version }}
-          registry: ${{ env.GHCR_DESTINATION_ORG }}
-
-      - name: Update compose file references
-        env:
-          CONTAINER: ${{ matrix.container }}
-          VERSION: ${{ needs.detect.outputs.version }}
-        run: |
-          find src \( -name "brick_compose*.yaml" -o -name "service_compose*.yaml" \) | while read f; do
-            if grep -q "$CONTAINER" "$f"; then
-              echo "  Updating: $f"
-              sed -i -E "s|${CONTAINER}:[^ \"']+|${CONTAINER}:${VERSION}|g" "$f"
-            fi
-          done
-
-      - name: Configure Git
-        run: |
-          git config user.name "AppLab Actions Bot"
-          git config user.email "bot@arduino.cc"
-
-      # Opens no PR when the compose update touched nothing
-      - name: Create Pull Request
-        uses: peter-evans/create-pull-request@v8
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "feat: update ${{ matrix.container }} image references"
-          title: "[RELEASE BOT] Update ${{ matrix.container }} image references"
-          body: |
-            This PR was automatically generated after releasing `${{ matrix.container }}:${{ needs.detect.outputs.version }}`.
-          branch: "container-release-${{ matrix.container }}-${{ needs.detect.outputs.version }}"
-          base: main
-          draft: true
-
-  build-downstream:
-    runs-on: ubuntu-24.04-arm
-    needs: [detect, build]
-    if: needs.detect.outputs.downstream_containers != '[]'
-    strategy:
-      fail-fast: false
-      matrix:
-        container: ${{ fromJson(needs.detect.outputs.downstream_containers) }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
+      - name: Setup Docker buildx
+        uses: docker/setup-buildx-action@v4
 
       - name: Check wheel requirement
         id: wheel
         run: |
           # Containers with a wheel bake context need the wheel artifact in dist/
-          echo "required=$(docker buildx bake --print "${{ matrix.container }}" 2>/dev/null | jq '.target["${{ matrix.container }}"].contexts.wheel != null')" >> $GITHUB_OUTPUT
+          echo "required=$(docker buildx bake --print $(jq -r 'join(" ")' <<< '${{ needs.detect.outputs.containers }}') 2>/dev/null | jq '[.target[].contexts // {} | has("wheel")] | any')" >> $GITHUB_OUTPUT
 
       - name: Download wheel artifact
         if: steps.wheel.outputs.required == 'true'
@@ -262,34 +149,49 @@ jobs:
           name: whl
           path: dist/
 
-      - name: Build and publish container
-        uses: ./.github/actions/build-container
+      # Bake builds the containers in dependency order through the parent links
+      # declared in docker-bake.hcl
+      - name: Build and push Docker images
+        uses: docker/bake-action@v7
         with:
-          container: ${{ matrix.container }}
-          registry: ${{ env.GHCR_DESTINATION_ORG }}/
-          version: ${{ needs.detect.outputs.version }}
-          tags: type=raw,value=${{ needs.detect.outputs.version }}
-          cache-tag: release-buildcache
-          registry-host: ${{ env.GHCR_REGISTRY }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+          source: .
+          targets: ${{ join(fromJson(needs.detect.outputs.containers)) }}
+          files: ./docker-bake.hcl
+          push: true
+        env:
+          REGISTRY: ${{ env.GHCR_DESTINATION_ORG }}/
+          IMAGE_TAG: ${{ needs.detect.outputs.version }}
+          BASE_IMAGE_VERSION: ${{ needs.detect.outputs.version }}
+          CACHE_TAG: release-buildcache
 
       - name: SBOM Delta
-        uses: ./.github/actions/sbom-delta
+        env:
+          VERSION: ${{ needs.detect.outputs.version }}
+          REGISTRY: ${{ env.GHCR_DESTINATION_ORG }}
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+          python3 ./scripts/sbom_delta.py \
+            --version "$VERSION" \
+            --registry "$REGISTRY" \
+            $(jq -r 'join(" ")' <<< '${{ needs.detect.outputs.containers }}')
+
+      - name: Upload delta SBOM artifacts
+        uses: actions/upload-artifact@v4
         with:
-          container: ${{ matrix.container }}
-          version: ${{ needs.detect.outputs.version }}
-          registry: ${{ env.GHCR_DESTINATION_ORG }}
+          name: sbom-delta-${{ needs.detect.outputs.tag_prefix }}
+          path: ./containers/*/sbom-delta/
 
       - name: Update compose file references
         env:
-          CONTAINER: ${{ matrix.container }}
           VERSION: ${{ needs.detect.outputs.version }}
         run: |
-          find src \( -name "brick_compose*.yaml" -o -name "service_compose*.yaml" \) | while read f; do
-            if grep -q "$CONTAINER" "$f"; then
-              echo "  Updating: $f"
-              sed -i -E "s|${CONTAINER}:[^ \"']+|${CONTAINER}:${VERSION}|g" "$f"
-            fi
+          for CONTAINER in $(jq -r 'join(" ")' <<< '${{ needs.detect.outputs.containers }}'); do
+            find src \( -name "brick_compose*.yaml" -o -name "service_compose*.yaml" \) | while read f; do
+              if grep -q "$CONTAINER" "$f"; then
+                echo "  Updating: $f"
+                sed -i -E "s|${CONTAINER}:[^ \"']+|${CONTAINER}:${VERSION}|g" "$f"
+              fi
+            done
           done
 
       - name: Configure Git
@@ -302,18 +204,18 @@ jobs:
         uses: peter-evans/create-pull-request@v8
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "feat: update ${{ matrix.container }} image references"
-          title: "[RELEASE BOT] Update ${{ matrix.container }} image references"
+          commit-message: "feat: update image references to ${{ needs.detect.outputs.version }}"
+          title: "[RELEASE BOT] Update image references for ${{ needs.detect.outputs.tag_ref }}"
           body: |
-            This PR was automatically generated after releasing `${{ matrix.container }}:${{ needs.detect.outputs.version }}`.
-          branch: "container-release-${{ matrix.container }}-${{ needs.detect.outputs.version }}"
+            This PR was automatically generated after the release of `${{ needs.detect.outputs.tag_ref }}`.
+          branch: "container-release-${{ needs.detect.outputs.tag_prefix }}-${{ needs.detect.outputs.version }}"
           base: main
           draft: true
 
   upload-release:
     runs-on: ubuntu-24.04-arm
     if: startsWith(needs.detect.outputs.tag_ref, 'release/')
-    needs: [detect, upload-whl, build, build-downstream]
+    needs: [detect, upload-whl, build]
     steps:
       - name: Download wheel artifact
         uses: actions/download-artifact@v4

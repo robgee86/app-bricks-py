@@ -8,10 +8,11 @@ and the release groups. Both workflows build through `docker buildx bake`, so
 `docker buildx bake <container>` reproduces a CI build locally and `docker buildx bake --print` shows
 the resolved definition.
 
-The dependency graph between containers is not declared anywhere: it is derived from each Dockerfile's
-`FROM ${REGISTRY}app-bricks/<parent>:${BASE_IMAGE_VERSION}` line by `scripts/container_deps.py`, which
-both workflows and the SBOM tooling use. The same derivation yields the base image that delta SBOMs are
-computed against.
+The dependency graph between containers is declared in each Dockerfile's
+`FROM ${REGISTRY}app-bricks/<parent>:${BASE_IMAGE_VERSION}` line, mirrored by a `parent_context()`
+link in the bake target. Bake builds parents in-graph in dependency order, however deep the chain,
+building shared parents once. `scripts/container_deps.py` derives the same graph from the Dockerfiles,
+to widen the build selection and to resolve the base image delta SBOMs are computed against.
 
 | Image | Base | Purpose |
 |---|---|---|
@@ -22,8 +23,10 @@ computed against.
 ## Release Triggers (Tag-Based)
 
 A single workflow (`docker-publish.yml`) handles all container releases. It is triggered by any
-`prefix/X.Y.Z` tag. The prefix selects the matching `group` in `docker-bake.hcl`; the containers
-deriving from the group's members are rebuilt with it, in a second wave.
+`prefix/X.Y.Z` tag. The prefix selects the matching `group` in `docker-bake.hcl`, widened with the
+containers deriving from the group's members; one bake invocation rebuilds them all, ordered through
+the parent links, reusing unchanged layers from the `release-buildcache` registry cache. A release
+opens a single draft PR updating all compose file references.
 
 | Tag pattern | Containers | Extra behaviour |
 |---|---|---|
@@ -35,7 +38,7 @@ If the pushed tag prefix matches no group, the workflow exits cleanly with no bu
 ## Adding a New Container
 
 1. Create `containers/my-container/Dockerfile`. To build on another container of this repository,
-   start it from the parent image — this is also what puts it in the downstream build wave:
+   start it from the parent image:
 
 ```dockerfile
 ARG REGISTRY
@@ -48,10 +51,12 @@ FROM ${REGISTRY}app-bricks/my-parent:${BASE_IMAGE_VERSION}
 
 ```hcl
 target "my-container" {
-  inherits   = ["_common"]   # ["_downstream"] when building on another container of this repo
+  inherits   = ["_downstream"]   # ["_common"] when not building on a container of this repo
   context    = "containers/my-container"
+  tags       = image_tags("my-container")
   cache-from = cache_from("my-container")
   cache-to   = cache_to("my-container")
+  contexts   = parent_context("my-parent")   # only when building on a container of this repo
   args       = { MY_BUILD_ARG = "value" }
 }
 ```
@@ -59,18 +64,6 @@ target "my-container" {
 3. Push a tag `my-prefix/X.Y.Z` — the workflow picks it up automatically.
 
 No workflow file changes required.
-
-## Skip-Rebuild Logic
-
-Every release checks whether the container's source files actually changed since the previous tag of
-the same prefix:
-
-- **Changed** → full Docker build and push
-- **Unchanged** → `docker buildx imagetools create` re-tags the existing image to the new version (instant, no rebuild)
-
-The watched paths are the container's bake contexts (its build context plus named contexts such as
-`models`). The `wheel` context is special-cased to the wheel's inputs (`src/`, `pyproject.toml`,
-`Taskfile.dist.yml`), since the wheel itself is a build artifact and not tracked in git.
 
 ## Dev Build Workflow
 
@@ -82,19 +75,17 @@ The watched paths are the container's bake contexts (its build context plus name
 - `skip_cache` — rebuild without importing the build cache
 
 The selection is widened so related containers stay consistent: parents of selected containers are
-rebuilt first, and containers deriving from a selected one are rebuilt after it. The two build waves
-(`build` and `build-downstream` jobs) come from `scripts/container_deps.py waves`; downstream builds
-receive `BASE_IMAGE_VERSION=<tag>` so they use the freshly built upstream image. No container names are
-hardcoded in the workflows.
+built and pushed too, and containers deriving from a selected one are rebuilt with it. A single bake
+invocation builds everything — the parent links in `docker-bake.hcl` give bake the dependency order,
+at any depth, with shared parents built once. No container names are hardcoded in the workflows.
 
 ## Build Characteristics
 
 - **Single platform**: All images target `linux/arm64` only
 - **Registry**: `ghcr.io/arduino/app-bricks/`
 - **Caching**: builds import and export a registry cache (`mode=max`) — dev builds at
-  `<image>:<image-tag>-buildcache` (per branch), release builds at `<image>:release-buildcache`, so a
-  release touching only part of a container reuses the unchanged layers of the previous release.
-  Untouched containers skip the build entirely via the skip-rebuild logic
+  `<image>:<image-tag>-buildcache` (per branch), release builds at `<image>:release-buildcache`, so
+  releases only pay for the layers that actually changed since the previous release
 - **Release assets**: The `release/*` workflow also uploads the `.whl` to the GitHub Release via
   `softprops/action-gh-release`
 

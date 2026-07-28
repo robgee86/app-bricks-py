@@ -20,11 +20,12 @@ Run as a script it prints a JSON map:
 placeholders left intact. ``parent`` is the container name when the base is
 another container of this repository, otherwise null.
 
-The ``waves`` subcommand splits a selection into dependency-ordered build waves,
-for CI to build parents before the containers deriving from them:
+The ``closure`` subcommand widens a selection with the containers deriving from
+it, so CI builds a consistent set; bake orders the builds through its parent
+links:
 
-    $ container_deps.py waves python-base models-downloader
-    {"base": ["models-downloader", "python-base"], "downstream": ["python-apps-base"]}
+    $ container_deps.py closure python-base models-downloader
+    ["models-downloader", "python-apps-base", "python-base"]
 """
 
 from __future__ import annotations
@@ -80,14 +81,13 @@ def container_map(containers_dir: Path) -> dict[str, dict[str, str | None]]:
     return result
 
 
-def waves(containers_dir: Path, selection: list[str], expand_parents: bool) -> dict[str, list[str]]:
-    """Split a container selection into dependency-ordered build waves.
+def closure(containers_dir: Path, selection: list[str], expand_parents: bool) -> list[str]:
+    """Widen a container selection so related images stay consistent.
 
-    The selection is first widened with the containers deriving from it, so a
-    parent is never rebuilt without its children. With ``expand_parents`` the
-    parents of selected containers are added too, so a child is never rebuilt
-    on a stale base. The ``downstream`` wave holds every container whose parent
-    is built in the same run; ``base`` holds the rest.
+    The containers deriving from the selection are added, so a parent is never
+    rebuilt without its children. With ``expand_parents`` the parents of
+    selected containers are added too, so they are published alongside a child
+    that was rebuilt on them.
     """
     deps = container_map(containers_dir)
     unknown = sorted(set(selection) - deps.keys())
@@ -98,27 +98,25 @@ def waves(containers_dir: Path, selection: list[str], expand_parents: bool) -> d
     selected |= {name for name, info in deps.items() if info["parent"] in selected}
     if expand_parents:
         selected |= {parent for name in selected if (parent := deps[name]["parent"])}
-
-    downstream = {name for name in selected if deps[name]["parent"] in selected}
-    return {"base": sorted(selected - downstream), "downstream": sorted(downstream)}
+    return sorted(selected)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command")
-    waves_parser = subparsers.add_parser("waves", help="Split a selection into build waves.")
-    waves_parser.add_argument("containers", nargs="+", help="Selected container names.")
-    waves_parser.add_argument(
+    closure_parser = subparsers.add_parser("closure", help="Widen a selection with related containers.")
+    closure_parser.add_argument("containers", nargs="+", help="Selected container names.")
+    closure_parser.add_argument(
         "--expand-parents",
         action="store_true",
-        help="Also rebuild the parents of selected containers.",
+        help="Also include the parents of selected containers.",
     )
     args = parser.parse_args()
 
     containers_dir = Path(__file__).resolve().parent.parent / "containers"
-    if args.command == "waves":
+    if args.command == "closure":
         try:
-            result: object = waves(containers_dir, args.containers, args.expand_parents)
+            result: object = closure(containers_dir, args.containers, args.expand_parents)
         except ValueError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1

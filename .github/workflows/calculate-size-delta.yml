@@ -63,32 +63,19 @@ jobs:
         with:
           driver-opts: network=host
 
-      - name: Build the base Docker image
+      # The parent link in docker-bake.hcl builds python-base before python-apps-base
+      - name: Build the Docker images
         uses: docker/bake-action@v7
         with:
           source: .
-          targets: python-base
+          targets: python-base,python-apps-base
           push: true
           set: |
             *.cache-from=type=gha
             *.cache-to=type=gha,mode=max
         env:
           REGISTRY: localhost:5000/
-          DEFAULT_TAG: localhost:5000/app-bricks/python-base:latest
-
-      - name: Build the apps base Docker image
-        uses: docker/bake-action@v7
-        with:
-          source: .
-          targets: python-apps-base
-          push: true
-          set: |
-            *.cache-from=type=gha
-            *.cache-to=type=gha,mode=max
-        env:
-          REGISTRY: localhost:5000/
-          BASE_IMAGE_VERSION: latest
-          DEFAULT_TAG: localhost:5000/app-bricks/python-apps-base:latest
+          IMAGE_TAG: latest
 
       - name: Pull images for inspection
         run: |

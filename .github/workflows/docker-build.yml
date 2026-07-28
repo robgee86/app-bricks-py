@@ -37,7 +37,6 @@ jobs:
     outputs:
       branch: ${{ steps.resolve.outputs.branch }}
       containers: ${{ steps.detect.outputs.containers }}
-      downstream_containers: ${{ steps.detect.outputs.downstream_containers }}
       image_tag: ${{ steps.detect.outputs.image_tag }}
     steps:
       - name: Resolve branch
@@ -73,67 +72,24 @@ jobs:
           if [[ -z "$SELECTED" ]]; then
             echo "No containers to build"
             echo "containers=[]" >> $GITHUB_OUTPUT
-            echo "downstream_containers=[]" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          # Widen the selection with parents and derived containers, split into build waves
-          WAVES=$(python3 scripts/container_deps.py waves --expand-parents $SELECTED)
-          echo "Base containers: $(echo "$WAVES" | jq -r '.base | join(" ")')"
-          echo "Downstream containers: $(echo "$WAVES" | jq -r '.downstream | join(" ")')"
-          echo "containers=$(echo "$WAVES" | jq -c .base)" >> $GITHUB_OUTPUT
-          echo "downstream_containers=$(echo "$WAVES" | jq -c .downstream)" >> $GITHUB_OUTPUT
+          # Widen the selection with parents and derived containers, so related
+          # images stay consistent; bake orders the builds through parent links
+          CONTAINERS=$(python3 scripts/container_deps.py closure --expand-parents $SELECTED)
+          echo "Containers: $(echo "$CONTAINERS" | jq -r 'join(" ")')"
+          echo "containers=$CONTAINERS" >> $GITHUB_OUTPUT
 
-          # Fail here rather than on every build runner if a container has no bake target
-          docker buildx bake --print $(echo "$WAVES" | jq -r '.base + .downstream | join(" ")') > /dev/null
+          # Fail early if a container has no bake target
+          docker buildx bake --print $(echo "$CONTAINERS" | jq -r 'join(" ")') > /dev/null
 
   build:
     needs: [setup]
     if: needs.setup.outputs.containers != '[]'
     runs-on: ubuntu-24.04-arm
-    strategy:
-      fail-fast: false
-      matrix:
-        container: ${{ fromJson(needs.setup.outputs.containers) }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.setup.outputs.branch }}
-          fetch-depth: 0
-
-      - name: Build and publish container
-        uses: ./.github/actions/build-container
-        with:
-          container: ${{ matrix.container }}
-          registry: ${{ env.DEV_REGISTRY_PATH }}
-          version: ${{ needs.setup.outputs.image_tag }}
-          tags: |
-            type=raw,value=${{ needs.setup.outputs.image_tag }}
-            type=raw,value=${{ needs.setup.outputs.image_tag }}-${{ github.run_number }}
-          cache-tag: ${{ needs.setup.outputs.image_tag }}-buildcache
-          skip-cache: ${{ inputs.skip_cache }}
-          registry-host: ${{ env.REGISTRY_HOST }}
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: SBOM Delta
-        uses: ./.github/actions/sbom-delta
-        with:
-          container: ${{ matrix.container }}
-          version: ${{ needs.setup.outputs.image_tag }}
-          registry: ${{ env.DEV_REGISTRY_PATH }}
-
-  build-downstream:
-    needs: [setup, build]
-    if: needs.setup.outputs.downstream_containers != '[]'
-    runs-on: ubuntu-24.04-arm
     env:
       TASKFILE_VERSION: "3.45.4"
-    strategy:
-      fail-fast: false
-      matrix:
-        container: ${{ fromJson(needs.setup.outputs.downstream_containers) }}
 
     steps:
       - name: Checkout repository
@@ -143,7 +99,7 @@ jobs:
           fetch-depth: 0
 
       - name: Build wheel in debian:trixie
-        if: matrix.container == 'python-apps-base'
+        if: contains(fromJson(needs.setup.outputs.containers), 'python-apps-base')
         run: |
           # Remove tags that setuptools_scm can't parse (only ai/* and release/* are valid)
           git tag -l | grep -v -E '^(ai|release)/' | xargs -r git tag -d
@@ -166,23 +122,46 @@ jobs:
               task build-dev
             "
 
-      - name: Build and publish container
-        uses: ./.github/actions/build-container
+      - name: Setup Docker buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log into registry ${{ env.REGISTRY_HOST }}
+        uses: docker/login-action@v4
         with:
-          container: ${{ matrix.container }}
-          registry: ${{ env.DEV_REGISTRY_PATH }}
-          version: ${{ needs.setup.outputs.image_tag }}
-          tags: |
-            type=raw,value=${{ needs.setup.outputs.image_tag }}
-            type=raw,value=${{ needs.setup.outputs.image_tag }}-${{ github.run_number }}
-          cache-tag: ${{ needs.setup.outputs.image_tag }}-buildcache
-          skip-cache: ${{ inputs.skip_cache }}
-          registry-host: ${{ env.REGISTRY_HOST }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+          registry: ${{ env.REGISTRY_HOST }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Bake builds the selected containers and their parents in dependency
+      # order through the parent links declared in docker-bake.hcl
+      - name: Build and push Docker images
+        uses: docker/bake-action@v7
+        with:
+          source: .
+          targets: ${{ join(fromJson(needs.setup.outputs.containers)) }}
+          files: ./docker-bake.hcl
+          push: true
+        env:
+          REGISTRY: ${{ env.DEV_REGISTRY_PATH }}
+          IMAGE_TAG: ${{ needs.setup.outputs.image_tag }}
+          RUN_NUMBER: ${{ github.run_number }}
+          BASE_IMAGE_VERSION: ${{ needs.setup.outputs.image_tag }}
+          CACHE_TAG: ${{ needs.setup.outputs.image_tag }}-buildcache
+          SKIP_CACHE: ${{ inputs.skip_cache }}
 
       - name: SBOM Delta
-        uses: ./.github/actions/sbom-delta
+        env:
+          VERSION: ${{ needs.setup.outputs.image_tag }}
+          REGISTRY: ${{ env.DEV_REGISTRY_PATH }}
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+          python3 ./scripts/sbom_delta.py \
+            --version "$VERSION" \
+            --registry "$REGISTRY" \
+            $(echo '${{ needs.setup.outputs.containers }}' | jq -r 'join(" ")')
+
+      - name: Upload delta SBOM artifacts
+        uses: actions/upload-artifact@v4
         with:
-          container: ${{ matrix.container }}
-          version: ${{ needs.setup.outputs.image_tag }}
-          registry: ${{ env.DEV_REGISTRY_PATH }}
+          name: sbom-delta
+          path: ./containers/*/sbom-delta/
