@@ -95,10 +95,46 @@ def closure(containers_dir: Path, selection: list[str], expand_parents: bool) ->
         raise ValueError(f"Unknown containers: {', '.join(unknown)}")
 
     selected = set(selection)
-    selected |= {name for name, info in deps.items() if info["parent"] in selected}
+    while True:
+        descendants = {name for name, info in deps.items() if info["parent"] in selected} - selected
+        if not descendants:
+            break
+        selected |= descendants
+
     if expand_parents:
-        selected |= {parent for name in selected if (parent := deps[name]["parent"])}
+        frontier = selected
+        while frontier:
+            parents = {parent for name in frontier if (parent := deps[name]["parent"])} - selected
+            selected |= parents
+            frontier = parents
     return sorted(selected)
+
+
+def tree(containers_dir: Path) -> str:
+    """Render the container hierarchy grouped by external base image."""
+    deps = container_map(containers_dir)
+    children: dict[str | None, list[str]] = {}
+    for name, info in deps.items():
+        children.setdefault(info["parent"], []).append(name)
+
+    lines: list[str] = []
+
+    def render(name: str, prefix: str) -> None:
+        branch = children.get(name, [])
+        for i, child in enumerate(sorted(branch)):
+            last = i == len(branch) - 1
+            lines.append(f"{prefix}{'└─' if last else '├─'} {child}")
+            render(child, prefix + ("   " if last else "│  "))
+
+    roots = sorted(name for name, info in deps.items() if info["parent"] is None)
+    for base in sorted({deps[r]["base"] for r in roots}):
+        lines.append(base)
+        for root in (r for r in roots if deps[r]["base"] == base):
+            last = root == max(r for r in roots if deps[r]["base"] == base)
+            lines.append(f"{'└─' if last else '├─'} {root}")
+            render(root, "   " if last else "│  ")
+        lines.append("")
+    return "\n".join(lines).rstrip()
 
 
 def main() -> int:
@@ -111,6 +147,7 @@ def main() -> int:
         action="store_true",
         help="Also include the parents of selected containers.",
     )
+    subparsers.add_parser("tree", help="Print the container hierarchy.")
     args = parser.parse_args()
 
     containers_dir = Path(__file__).resolve().parent.parent / "containers"
@@ -121,6 +158,8 @@ def main() -> int:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
         print(json.dumps(result))
+    elif args.command == "tree":
+        print(tree(containers_dir))
     else:
         print(json.dumps(container_map(containers_dir), indent=2, sort_keys=True))
     return 0

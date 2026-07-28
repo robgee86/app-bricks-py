@@ -13,6 +13,7 @@ The dependency graph between containers is declared in each Dockerfile's
 link in the bake target. Bake builds parents in-graph in dependency order, however deep the chain,
 building shared parents once. `scripts/container_deps.py` derives the same graph from the Dockerfiles,
 to widen the build selection and to resolve the base image delta SBOMs are computed against.
+`task containers:tree` prints the hierarchy.
 
 | Image | Base | Purpose |
 |---|---|---|

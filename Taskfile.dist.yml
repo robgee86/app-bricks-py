@@ -258,3 +258,8 @@ tasks:
     desc: Generate delta SBOMs for containers (requires syft and registry access)
     cmds:
       - python3 ./scripts/sbom_delta.py {{.CLI_ARGS}}
+
+  containers:tree:
+    desc: Print the container parent-child hierarchy
+    cmds:
+      - python3 ./scripts/container_deps.py tree
