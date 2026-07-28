@@ -140,35 +140,33 @@ For development purposes, it is possible to change docker registry path using va
 ```sh
 DOCKER_REGISTRY_BASE=ghcr.io/arduino/
 ```
-For containers built as part of this library, 'dev-latest' tag is used to point to latest development container.
-If it is needed to use a different version, override it via 'APPSLAB_VERSION' env variable.
+Containers built as part of this library are tagged `dev-<branch-name>` by the dev build pipeline and with a semver version number on release.
+To use a specific version, override it via 'APPSLAB_VERSION' env variable.
 
 ## Release
 
-Release is based on tags pushed to `main`. A single workflow (`docker-github-publish.yml`) handles all container releases and detects which containers to build from the tag prefix, matched against the release groups in `docker-bake.hcl`.
+Release is based on tags pushed to `main`. A single workflow (`docker-publish.yml`) handles all container releases and detects which containers to publish from the tag prefix, matched against the release groups in `docker-bake.hcl`.
 
-| Tag | What it releases |
+| Tag | What it publishes |
 |---|---|
-| `base/X.Y.Z` | `python-base` base image |
-| `release/X.Y.Z` | `python-apps-base` container + Python `.whl` uploaded to GitHub Release |
-| `ai/X.Y.Z` | `ei-models-runner` AI container |
+| `release/X.Y.Z` | `python-apps-base` and `models-downloader` containers + Python `.whl` uploaded to GitHub Release |
+| `ai/X.Y.Z` | The AI model runner containers (`ei-*`, `llamacpp-*`, `gesture-recognition-runner`) |
 
 Release cycles for AI containers and Bricks are independent — they use separate tag prefixes and can be released at any time without affecting each other.
 
-After releasing a new version of AI containers, compose files that use AI containers are updated automatically via a generated PR.
+After a release, compose files referencing the released containers are updated automatically via a generated PR.
 
-**Downstream cascade**: when `python-base` is released, the workflow automatically triggers a rebuild of `python-apps-base` (and any other container declared as a downstream dependency). No manual step required.
+Only the distributed leaf containers are published. Intermediate base containers (`python-slim`, `python-base`, `qairt-common-base`, `aihub-models-runner`) are rebuilt in-graph as part of every build that needs them — `docker buildx bake` orders the builds through the parent links declared in `docker-bake.hcl` — and are never tagged.
 
-For development, the dev build pipeline (`docker-github-build.yml`) rebuilds only the containers whose source files changed on the branch. Dependent containers are built in the correct order — downstream containers wait for their upstream to finish and use the freshly built image.
+For development, the dev build pipeline (`docker-build.yml`) is dispatched manually with a selection of containers and builds them, together with their parents and derived containers, under a branch-specific tag.
 
 See [`.github/README.md`](.github/README.md) for full CI documentation.
 
 ### Container layers
 
-Library containers are based on a set of pre-defined Python base images that are updated with a different frequency wrt library release.
-Base images are built by tagging `base/X.Y.Z`. This should be done only when base image dependencies or infrastructure change.
+Library containers are structured over shared intermediate base images (run `task containers:tree` to print the hierarchy), which are updated with a different frequency wrt library releases and cached across builds.
 
-Base images are required to:
+Intermediate base images are required to:
 * reduce the amount of updated layers during a single library update
 * promote reuse of existing layers in multiple builds
 * cache pre-compiled python libraries as much as possible

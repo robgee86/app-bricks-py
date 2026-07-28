@@ -13,7 +13,6 @@ The dependency graph between containers is declared in each Dockerfile's
 link in the bake target. Bake builds parents in-graph in dependency order, however deep the chain,
 building shared parents once. `scripts/container_deps.py` derives the same graph from the Dockerfiles,
 to widen the build selection and to resolve the base image delta SBOMs are computed against.
-`task containers:tree` prints the hierarchy.
 
 `task containers:tree` prints the current hierarchy; the main containers:
 
@@ -28,10 +27,10 @@ to widen the build selection and to resolve the base image delta SBOMs are compu
 ## Release Triggers (Tag-Based)
 
 A single workflow (`docker-publish.yml`) handles all container releases. It is triggered by any
-`prefix/X.Y.Z` tag. The prefix selects the matching `group` in `docker-bake.hcl`, widened with the
-containers deriving from the group's members; one bake invocation rebuilds them all, ordered through
-the parent links, reusing unchanged layers from the `release-buildcache` registry cache. A release
-opens a single draft PR updating all compose file references.
+`prefix/X.Y.Z` tag. The prefix selects the matching `group` in `docker-bake.hcl`; one bake invocation
+rebuilds its members, ordered through the parent links, reusing unchanged layers from the
+`release-buildcache` registry cache. A release opens a single draft PR updating all compose file
+references.
 
 Only distributed leaf images are published; intermediate containers (`python-slim`, `python-base`,
 `qairt-common-base`, `aihub-models-runner`) are built in-graph as parents and never tagged. Client
@@ -75,7 +74,8 @@ target "my-container" {
 }
 ```
 
-3. Push a tag `my-prefix/X.Y.Z` — the workflow picks it up automatically.
+3. Push a tag of the chosen prefix (e.g. `ai/X.Y.Z`) — the workflow picks the container up
+   automatically.
 
 No workflow file changes required.
 
