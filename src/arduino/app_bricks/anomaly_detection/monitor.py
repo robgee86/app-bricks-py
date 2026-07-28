@@ -164,6 +164,18 @@ class AnomalyDetection:
                 detector=pipeline.detector,
             )
 
+    def recalibrate(self):
+        """Adopt the current signal regime as the new normal, on demand.
+
+        Learned bands and score cutoffs start fresh, and the monitor re-warms before
+        judging again (on_ready fires when it has). An open anomaly episode closes with
+        a genuine on_normal within a few pushes; hard limits stay live throughout. Use
+        after an intentional process change that should not stay flagged as anomalous.
+        """
+        with self._lock:
+            self._pipeline.recalibrate()
+            self._dirty = True
+
     # ---- lifecycle ---------------------------------------------------------------
 
     def loop(self):

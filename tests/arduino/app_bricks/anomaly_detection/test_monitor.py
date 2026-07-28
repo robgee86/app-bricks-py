@@ -257,6 +257,57 @@ def test_gyro_handling_is_normal_but_sustained_vibration_fires(recorder):
     assert fired[-1].stats.bucket_size == pytest.approx(1.0, rel=0.05)
 
 
+def test_repeated_faults_keep_firing(recorder):
+    import math
+
+    hz, t = 10.0, 0.0
+    monitor = AnomalyDetection("rig", persist=False)
+    recorder.attach(monitor)
+
+    def push_seconds(seconds, wobble=0.0):
+        nonlocal t
+        for _ in range(int(seconds * hz)):
+            monitor.push(wobble * math.sin(2 * math.pi * 1.5 * t) + random.gauss(0, 0.02), at=T0 + t)
+            t += 1.0 / hz
+
+    push_seconds(150)  # quiet baseline, ready
+    assert monitor.ready
+    for episode in range(5):
+        before = len(recorder.of_kind("anomaly"))
+        push_seconds(20, wobble=3.0)
+        push_seconds(40)
+        assert len(recorder.of_kind("anomaly")) > before, f"episode {episode} must fire: faults are never absorbed into normal"
+    assert len(recorder.of_kind("normal")) >= 5
+
+
+def test_persistent_fault_stays_alarmed_until_recalibrated(recorder):
+    import math
+
+    hz, t = 10.0, 0.0
+    monitor = AnomalyDetection("rig", persist=False)
+    recorder.attach(monitor)
+
+    def push_seconds(seconds, wobble=0.0):
+        nonlocal t
+        for _ in range(int(seconds * hz)):
+            monitor.push(wobble * math.sin(2 * math.pi * 1.5 * t) + random.gauss(0, 0.02), at=T0 + t)
+            t += 1.0 / hz
+
+    push_seconds(150)
+    push_seconds(120, wobble=3.0)  # persistent regime change
+    assert len(recorder.of_kind("anomaly")) == 1, "one episode, no event spam"
+    assert recorder.of_kind("normal") == [], "a persistent fault must not be silently adopted"
+
+    # The operator declares this the new normal.
+    monitor.recalibrate()
+    assert not monitor.ready, "a fresh band must re-warm before judging again"
+    push_seconds(150, wobble=3.0)
+    assert len(recorder.of_kind("normal")) == 1, "recalibrating closes the episode with a genuine on_normal"
+    assert len(recorder.of_kind("anomaly")) == 1, "the adopted regime is no longer anomalous"
+    assert monitor.ready
+    assert recorder.kinds().count("ready") == 2, "on_ready announces the recalibrated band"
+
+
 def test_frequency_shift_at_constant_amplitude_fires_spectrum_lane(recorder):
     import math
 

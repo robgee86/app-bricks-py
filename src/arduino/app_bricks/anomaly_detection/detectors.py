@@ -262,7 +262,7 @@ class TrimmedPath:
         self._scorer = TrimmedScorer()
         self._filter = quantile_filter(self._scorer, quantile, protect=protect)
 
-    def evaluate(self, value: float, uncertainty: float = 0.0) -> Evaluation:
+    def evaluate(self, value: float, uncertainty: float = 0.0, learn: bool = True) -> Evaluation:
         self._scorer.observe(value)
         self._scorer.uncertainty = uncertainty
         mu, sigma = self._scorer.moments()
@@ -270,12 +270,19 @@ class TrimmedPath:
         z = (value - mu) / sigma if mu is not None and sigma > 0 else 0.0
         score = self._filter.score_one(None, value)
         anomalous = self._filter.classify(score)
-        self._filter.learn_one(None, value)
+        if learn:
+            self._filter.learn_one(None, value)
         self._scorer.uncertainty = 0.0
         return Evaluation(score, anomalous, mu, {"z": z, "threshold": self._filter.quantile.get()})
 
     def flush(self):
         self._scorer.flush()
+
+    def recalibrate(self):
+        """Forget learned normality entirely: the window and the score cutoff start fresh."""
+        quantile = self._filter.q
+        self._scorer.flush()
+        self._filter.quantile = river_stats.RollingQuantile(q=quantile, window_size=CUTOFF_WINDOW)
 
     def moments(self) -> tuple[float | None, float]:
         return self._scorer.moments()
@@ -317,6 +324,12 @@ class SeasonalPath:
     def reset_buffer(self):
         """Drop pre-resolution samples: the rate guard changed the scoring granularity."""
         self._prebuffer.clear()
+
+    def recalibrate(self):
+        """Forget the residual calibration; the seasonal model itself keeps tracking."""
+        quantile = self._residual_filter.q
+        self._residual_scorer.flush()
+        self._residual_filter.quantile = river_stats.RollingQuantile(q=quantile, window_size=CUTOFF_WINDOW)
 
     def resolve(self, median_iat: float):
         """Fix L from the measured cadence, apply the rollup guard, replay buffered values."""

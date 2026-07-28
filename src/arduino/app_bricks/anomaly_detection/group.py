@@ -593,6 +593,27 @@ class AnomalyDetectionGroup:
                 detector=self._watcher.detector,
             )
 
+    def recalibrate(self):
+        """Adopt the current regime as the new normal, on demand.
+
+        Every member re-learns from incoming data (warm-up state kept) and the joint /
+        relationship model starts fresh, re-warming before it judges again. Use after an
+        intentional process change that should not stay flagged as anomalous.
+        """
+        with self._lock:
+            for member in self._members.values():
+                member.recalibrate()
+            if self.watch == "joint":
+                self._watcher = _JointWatcher(self.signals, self._joint_sens.quantile)
+            elif len(self.signals) == 2:
+                self._watcher = _PairRelationship(self._joint_sens.ph_threshold)
+            else:
+                self._watcher = _MultiRelationship(self.signals, self._joint_sens.ph_threshold)
+            self._gate = EpisodeGate(self._joint_sens.gate, self._joint_sens.hysteresis, self._joint_sens.score_floor)
+            self._evaluations = 0
+            self._ready_announced = False
+            self._dirty = True
+
     # ---- lifecycle ---------------------------------------------------------------
 
     def loop(self):

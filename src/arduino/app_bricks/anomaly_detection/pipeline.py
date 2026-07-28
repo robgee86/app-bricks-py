@@ -253,11 +253,15 @@ class SignalPipeline:
         if evaluation is not None:
             self.learned_evaluations += 1
             self.last_expected = evaluation.expected
+        # Episode-scoped protection for the unprotected lanes: learning everything is
+        # what lets recurring ordinary activity become normal, but while an anomaly
+        # episode is open the fault itself must not be absorbed into the band.
+        learn = not self._gate.in_anomaly
         lanes = [(evaluation, "level")] if evaluation is not None else []
         if self._spread_path is not None and bucket.spread is not None:
-            lanes.append((self._spread_path.evaluate(bucket.spread), "spread"))
+            lanes.append((self._spread_path.evaluate(bucket.spread, learn=learn), "spread"))
         if self._centroid_path is not None and bucket.centroid is not None:
-            lanes.append((self._centroid_path.evaluate(bucket.centroid), "spectrum"))
+            lanes.append((self._centroid_path.evaluate(bucket.centroid, learn=learn), "spectrum"))
         if not lanes:
             return None, False, None
 
@@ -357,6 +361,21 @@ class SignalPipeline:
             return []
         stats = Stats(eta_s=round(breach["eta_s"], 3), detector=source.detector)
         return [self._event("forecast", value, breach["projected"], 1.0, at, stats)]
+
+    def recalibrate(self):
+        """Forget learned normality and re-learn from incoming data (on-demand adoption).
+
+        Bands and score cutoffs start fresh and the warm-up restarts (a fresh band must
+        mature before it judges again); cadence and bucketing resolution are kept. An
+        open anomaly episode closes with a genuine on_normal within a few pushes.
+        """
+        for path in (self._learned, self._spread_path, self._centroid_path):
+            recalibrate = getattr(path, "recalibrate", None)
+            if recalibrate is not None:
+                recalibrate()
+        self._pending_flush = None
+        self.learned_evaluations = 0
+        self._ready_announced = False
 
     def check_staleness(self, now: float) -> list[AnomalyEvent]:
         """Emit on_stalled once per staleness episode; a fresh push resets the episode."""

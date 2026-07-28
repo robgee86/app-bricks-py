@@ -89,6 +89,11 @@ warm-up. If the cadence later changes by more than 2x, `on_drift` fires with
 `stats.reason="cadence_change"` and the seasonal model keeps running against the old
 calibration: restart the app to re-calibrate (fresh cadence measurement).
 
+A detected fault never becomes "normal" on its own: learning pauses while an anomaly
+episode is open, so the same fault fires again next time. After an intentional process
+change, call `recalibrate()` to adopt the current regime as the new normal — the brick
+re-learns and fires `on_ready` when calibrated again.
+
 Persistence is on by default (`persist=False` opts out), storing model state under
 `./data/anomaly_detection/`; changing the configuration intentionally invalidates saved
 state so a model is never scored against assumptions it was not fitted under.
