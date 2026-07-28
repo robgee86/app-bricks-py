@@ -91,8 +91,10 @@ hardcoded in the workflows.
 
 - **Single platform**: All images target `linux/arm64` only
 - **Registry**: `ghcr.io/arduino/app-bricks/`
-- **Caching**: dev builds import and export a registry cache at `<image>:<image-tag>-buildcache`
-  (`mode=max`); release builds run without cache and rely on the skip-rebuild logic instead
+- **Caching**: builds import and export a registry cache (`mode=max`) — dev builds at
+  `<image>:<image-tag>-buildcache` (per branch), release builds at `<image>:release-buildcache`, so a
+  release touching only part of a container reuses the unchanged layers of the previous release.
+  Untouched containers skip the build entirely via the skip-rebuild logic
 - **Release assets**: The `release/*` workflow also uploads the `.whl` to the GitHub Release via
   `softprops/action-gh-release`
 
