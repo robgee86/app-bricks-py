@@ -143,9 +143,6 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install crane
-        uses: imjasonh/setup-crane@v0.4
-
       - name: Check if rebuild required
         id: rebuild_check
         run: |
@@ -174,7 +171,7 @@ jobs:
               echo "Sources changed since $PREV_TAG — full build required"
               echo "$CHANGED"
               echo "needs_build=true" >> $GITHUB_OUTPUT
-            elif ! crane manifest ${{ env.GHCR_DESTINATION_ORG }}/app-bricks/${{ matrix.container }}:${PREV_VERSION} > /dev/null 2>&1; then
+            elif ! docker buildx imagetools inspect ${{ env.GHCR_DESTINATION_ORG }}/app-bricks/${{ matrix.container }}:${PREV_VERSION} > /dev/null 2>&1; then
               echo "Previous image ${PREV_VERSION} not found in registry — full build required"
               echo "needs_build=true" >> $GITHUB_OUTPUT
             else
@@ -187,9 +184,9 @@ jobs:
         if: steps.rebuild_check.outputs.needs_build == 'false'
         run: |
           echo "Re-tagging ${{ matrix.container }} from ${{ steps.rebuild_check.outputs.prev_version }} to ${{ needs.detect.outputs.version }}"
-          crane copy \
-            ${{ env.GHCR_DESTINATION_ORG }}/app-bricks/${{ matrix.container }}:${{ steps.rebuild_check.outputs.prev_version }} \
-            ${{ env.GHCR_DESTINATION_ORG }}/app-bricks/${{ matrix.container }}:${{ needs.detect.outputs.version }}
+          docker buildx imagetools create \
+            --tag ${{ env.GHCR_DESTINATION_ORG }}/app-bricks/${{ matrix.container }}:${{ needs.detect.outputs.version }} \
+            ${{ env.GHCR_DESTINATION_ORG }}/app-bricks/${{ matrix.container }}:${{ steps.rebuild_check.outputs.prev_version }}
 
       - name: Build and publish container
         if: steps.rebuild_check.outputs.needs_build == 'true'

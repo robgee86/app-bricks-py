@@ -66,7 +66,7 @@ Every release checks whether the container's source files actually changed since
 the same prefix:
 
 - **Changed** → full Docker build and push
-- **Unchanged** → `crane copy` re-tags the existing image to the new version (instant, no rebuild)
+- **Unchanged** → `docker buildx imagetools create` re-tags the existing image to the new version (instant, no rebuild)
 
 The watched paths are the container's bake contexts (its build context plus named contexts such as
 `models`). The `wheel` context is special-cased to the wheel's inputs (`src/`, `pyproject.toml`,
