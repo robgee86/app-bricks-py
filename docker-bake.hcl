@@ -112,17 +112,20 @@ group "default" {
     "python-apps-base",
     "python-base",
     "python-slim",
+    "qairt-common-base",
   ]
 }
 
-# Release groups: a "<prefix>/X.Y.Z" tag releases the containers of the
-# matching group, plus the containers deriving from them.
+# Release groups: a "<prefix>/X.Y.Z" tag publishes the containers of the
+# matching group. Only distributed leaf images are published; intermediate
+# containers are built in-graph through the parent links and stay untagged.
 group "ai" {
   targets = [
-    "aihub-models-runner",
     "ei-models-runner",
     "ei-qnn-models-runner",
-    "python-slim",
+    "gesture-recognition-runner",
+    "llamacpp-npu-runner",
+    "llamacpp-runner",
   ]
 }
 
@@ -130,16 +133,16 @@ group "release" {
   targets = [
     "models-downloader",
     "python-apps-base",
-    "python-base",
   ]
 }
 
 target "aihub-models-runner" {
-  inherits   = ["_common"]
+  inherits   = ["_downstream"]
   context    = "containers/aihub-models-runner"
   tags       = image_tags("aihub-models-runner")
   cache-from = cache_from("aihub-models-runner")
   cache-to   = cache_to("aihub-models-runner")
+  contexts   = parent_context("qairt-common-base")
 }
 
 target "ei-models-runner" {
@@ -173,7 +176,7 @@ target "llamacpp-npu-runner" {
   tags       = image_tags("llamacpp-npu-runner")
   cache-from = cache_from("llamacpp-npu-runner")
   cache-to   = cache_to("llamacpp-npu-runner")
-  contexts   = parent_context("aihub-models-runner")
+  contexts   = parent_context("qairt-common-base")
   args = {
     LLAMA_CPP_URL    = "https://github.com/arduino/app-bricks-py/releases/download/llamacpp%2F20260703/llamacpp-hexagon-20260703.tar.gz"
     LLAMA_CPP_DIGEST = "sha256:7aa6b9a4877b0afc0e129f6f60c1312b9e0826077dbf27bbfcdfb078bd19000f"
@@ -194,14 +197,15 @@ target "llamacpp-runner" {
 }
 
 target "models-downloader" {
-  inherits   = ["_common"]
+  inherits   = ["_downstream"]
   context    = "containers/models-downloader"
   tags       = image_tags("models-downloader")
   cache-from = cache_from("models-downloader")
   cache-to   = cache_to("models-downloader")
-  contexts = {
-    models = "models"
-  }
+  contexts = merge(
+    { models = "models" },
+    parent_context("python-slim"),
+  )
 }
 
 # The wheel context must hold the arduino wheel, built with `task build`.
@@ -218,8 +222,9 @@ target "python-apps-base" {
 }
 
 target "python-base" {
-  inherits   = ["_common"]
+  inherits   = ["_downstream"]
   context    = "containers/python-base"
+  contexts   = parent_context("python-slim")
   tags       = image_tags("python-base")
   cache-from = cache_from("python-base")
   cache-to   = cache_to("python-base")
@@ -237,6 +242,14 @@ target "python-base" {
     GSTREAMER_LIBGSTREAMER_PLUGINS_BASE_DEB_URL = "https://github.com/robgee86/app-bricks-py/releases/download/qtiqmmfsrc%2F1.8.1/libgstreamer-plugins-base1.0-0_1.26.2-1+deb13u1_arm64.deb"
     GSTREAMER_LIBGSTREAMER_PLUGINS_BASE_DEB_DIGEST = "sha256:a6e1aaadbac810957f5c4ce981d955c686734e85c23cbb5b89ddd33299f920c6"
   }
+}
+
+target "qairt-common-base" {
+  inherits   = ["_common"]
+  context    = "containers/qairt-common-base"
+  tags       = image_tags("qairt-common-base")
+  cache-from = cache_from("qairt-common-base")
+  cache-to   = cache_to("qairt-common-base")
 }
 
 target "python-slim" {

@@ -158,7 +158,8 @@ jobs:
           python3 ./scripts/sbom_delta.py \
             --version "$VERSION" \
             --registry "$REGISTRY" \
-            $(echo '${{ needs.setup.outputs.containers }}' | jq -r 'join(" ")')
+            --published "$(jq -r 'join(" ")' <<< '${{ needs.setup.outputs.containers }}')" \
+            $(jq -r 'join(" ")' <<< '${{ needs.setup.outputs.containers }}')
 
       - name: Upload delta SBOM artifacts
         uses: actions/upload-artifact@v4

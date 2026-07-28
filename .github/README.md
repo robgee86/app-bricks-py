@@ -15,10 +15,14 @@ building shared parents once. `scripts/container_deps.py` derives the same graph
 to widen the build selection and to resolve the base image delta SBOMs are computed against.
 `task containers:tree` prints the hierarchy.
 
+`task containers:tree` prints the current hierarchy; the main containers:
+
 | Image | Base | Purpose |
 |---|---|---|
-| **python-base** | `python:3.13-slim` | Foundation layer — system deps, user/group setup, fonts |
+| **python-slim** | `python:3.13-slim-trixie` | Shared minimal Python layer |
+| **python-base** | `python-slim` | Foundation layer — system deps, user/group setup, fonts |
 | **python-apps-base** | `python-base` | App runtime — installs the Arduino App Bricks `.whl`, Streamlit config |
+| **qairt-common-base** | `python:3.13-slim-trixie` | Qualcomm AI runtime base for the NPU runners |
 | **ei-models-runner** | Edge Impulse inference image | AI/ML model inference with OOTB models |
 
 ## Release Triggers (Tag-Based)
@@ -29,12 +33,21 @@ containers deriving from the group's members; one bake invocation rebuilds them 
 the parent links, reusing unchanged layers from the `release-buildcache` registry cache. A release
 opens a single draft PR updating all compose file references.
 
+Only distributed leaf images are published; intermediate containers (`python-slim`, `python-base`,
+`qairt-common-base`, `aihub-models-runner`) are built in-graph as parents and never tagged. Client
+layer reuse does not depend on publishing intermediates: layers are content-addressed, so leaves
+sharing a parent share its layer blobs, and pulling a new version downloads only the layers that
+actually changed.
+
 | Tag pattern | Containers | Extra behaviour |
 |---|---|---|
-| `release/X.Y.Z` | `python-base`, `python-apps-base`, `models-downloader` | Builds and uploads `.whl` to GitHub Release (displayed as `X.Y.Z`) |
-| `ai/X.Y.Z` | `aihub-models-runner`, `ei-models-runner`, `ei-qnn-models-runner`, `python-slim` + derived runners | Auto-creates a PR to update compose file references |
+| `release/X.Y.Z` | `models-downloader`, `python-apps-base` | Builds and uploads `.whl` to GitHub Release (displayed as `X.Y.Z`) |
+| `ai/X.Y.Z` | `ei-models-runner`, `ei-qnn-models-runner`, `gesture-recognition-runner`, `llamacpp-npu-runner`, `llamacpp-runner` | Auto-creates a PR to update compose file references |
 
 If the pushed tag prefix matches no group, the workflow exits cleanly with no build.
+
+Delta SBOMs are computed against the nearest *published* ancestor: unpublished intermediate content
+counts as part of the leaf image that ships it.
 
 ## Adding a New Container
 
@@ -47,8 +60,8 @@ ARG BASE_IMAGE_VERSION
 FROM ${REGISTRY}app-bricks/my-parent:${BASE_IMAGE_VERSION}
 ```
 
-2. Add a matching target to `docker-bake.hcl` and list it in the `default` group plus the release
-   group of the tag prefix that should release it:
+2. Add a matching target to `docker-bake.hcl` and list it in the `default` group — plus the release
+   group of the tag prefix that should publish it, if it is a distributed leaf image:
 
 ```hcl
 target "my-container" {

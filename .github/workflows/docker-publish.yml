@@ -69,8 +69,14 @@ jobs:
             exit 0
           fi
 
+          # Containers released by another tag prefix are never cascade-released:
+          # they are built in-graph as parents when needed, on their own tag otherwise
+          OTHER_GROUP_MEMBERS=$(docker buildx bake --list=targets 2>/dev/null \
+            | awk -F'\t+' -v g="$TAG_PREFIX" 'NR>1 && $2 != "" && $1 != "default" && $1 != g {print $2}' \
+            | tr -d ' ' | tr ',' '\n' | sort -u)
+
           # Widen with the containers deriving from the matching ones
-          CONTAINERS=$(python3 scripts/container_deps.py closure $MATCHING)
+          CONTAINERS=$(python3 scripts/container_deps.py closure --exclude $OTHER_GROUP_MEMBERS -- $MATCHING)
           echo "Containers: $(echo "$CONTAINERS" | jq -r 'join(" ")')"
           echo "containers=$CONTAINERS" >> $GITHUB_OUTPUT
 
@@ -173,6 +179,7 @@ jobs:
           python3 ./scripts/sbom_delta.py \
             --version "$VERSION" \
             --registry "$REGISTRY" \
+            --published "$(jq -r 'join(" ")' <<< '${{ needs.detect.outputs.containers }}')" \
             $(jq -r 'join(" ")' <<< '${{ needs.detect.outputs.containers }}')
 
       - name: Upload delta SBOM artifacts

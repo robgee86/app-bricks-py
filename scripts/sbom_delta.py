@@ -63,16 +63,36 @@ def resolve_template(template: str, context: dict[str, str]) -> str:
     raise SbomDeltaError(f"Could not resolve template after 10 passes: {template}")
 
 
-def resolve_runtime_base(containers_dir: Path, container: str, registry: str, version: str) -> str:
-    """Resolve the fully qualified runtime base image for a container.
+def resolve_runtime_base(
+    containers_dir: Path,
+    container: str,
+    registry: str,
+    version: str,
+    published: set[str] | None = None,
+) -> str:
+    """Resolve the image the delta SBOM is computed against.
 
     The base image is derived from the container's Dockerfile, expanding the
-    ``${REGISTRY}`` and ``${BASE_IMAGE_VERSION}`` build-arg placeholders.
+    ``${REGISTRY}`` and ``${BASE_IMAGE_VERSION}`` build-arg placeholders. When
+    ``published`` is given, unpublished parent containers are walked through —
+    their content belongs to the child's delta — until a published parent or
+    an external image is reached.
     """
     try:
-        template = container_deps.resolve_base_image(containers_dir / container / "Dockerfile")
+        deps = container_deps.container_map(containers_dir)
     except (OSError, ValueError) as exc:
         raise SbomDeltaError(f"Cannot resolve base image of '{container}': {exc}") from exc
+    if container not in deps:
+        raise SbomDeltaError(f"Cannot resolve base image of '{container}': no Dockerfile found.")
+
+    current = container
+    while True:
+        info = deps[current]
+        parent = info["parent"]
+        if parent is None or published is None or parent in published:
+            template = info["base"]
+            break
+        current = parent
 
     context = {
         "REGISTRY": normalize_registry(registry),
@@ -454,9 +474,12 @@ def generate_delta_for_container(
     container: str,
     registry: str,
     version: str,
+    published: set[str] | None = None,
 ) -> None:
     """Generate delta SBOM artifacts for a single container."""
-    base_image = resolve_runtime_base(containers_dir=containers_dir, container=container, registry=registry, version=version)
+    base_image = resolve_runtime_base(
+        containers_dir=containers_dir, container=container, registry=registry, version=version, published=published
+    )
     target_image = build_container_image(registry=registry, container=container, version=version)
 
     print(f"[{container}]")
@@ -512,6 +535,7 @@ def run_generate(args: argparse.Namespace) -> int:
                 container=container,
                 registry=registry,
                 version=args.version,
+                published=set(args.published.split()) if args.published else None,
             )
         except SbomDeltaError as exc:
             print(f"  ERROR: {exc}", file=sys.stderr)
@@ -531,6 +555,11 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("containers", nargs="*", help="Container names (default: all with a Dockerfile).")
     parser.add_argument("--registry", default=os.environ.get("REGISTRY", "ghcr.io/arduino/"), help="Registry prefix.")
     parser.add_argument("--version", default=os.environ.get("VERSION", "latest"), help="Image tag to scan.")
+    parser.add_argument(
+        "--published",
+        default="",
+        help="Space-separated published containers; deltas are computed against the nearest published ancestor.",
+    )
     return parser
 
 

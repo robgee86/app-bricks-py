@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: MPL-2.0
 
-FROM python:3.13-slim AS production
+FROM python:3.13-slim-trixie
 
 RUN set -ex; \
     apt-get update -y; \
@@ -28,3 +28,9 @@ RUN set -ex; \
     # precompile python files to .pyc to speed up startup time
     python -m compileall /usr/local/bin; \
     python -m compileall /usr/local/lib
+
+RUN set -ex; \
+    groupadd -g 1000 arduino || true; \
+    useradd -u 1000 -g arduino -ms /bin/bash arduino; \
+    mkdir /app; \
+    chown arduino:arduino -R /app

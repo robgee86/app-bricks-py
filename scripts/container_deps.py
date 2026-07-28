@@ -81,22 +81,29 @@ def container_map(containers_dir: Path) -> dict[str, dict[str, str | None]]:
     return result
 
 
-def closure(containers_dir: Path, selection: list[str], expand_parents: bool) -> list[str]:
+def closure(
+    containers_dir: Path,
+    selection: list[str],
+    expand_parents: bool,
+    exclude: list[str] | None = None,
+) -> list[str]:
     """Widen a container selection so related images stay consistent.
 
     The containers deriving from the selection are added, so a parent is never
     rebuilt without its children. With ``expand_parents`` the parents of
     selected containers are added too, so they are published alongside a child
-    that was rebuilt on them.
+    that was rebuilt on them. ``exclude`` stops the descendant expansion at the
+    given containers, e.g. at those released by another tag prefix.
     """
     deps = container_map(containers_dir)
     unknown = sorted(set(selection) - deps.keys())
     if unknown:
         raise ValueError(f"Unknown containers: {', '.join(unknown)}")
 
+    excluded = set(exclude or []) - set(selection)
     selected = set(selection)
     while True:
-        descendants = {name for name, info in deps.items() if info["parent"] in selected} - selected
+        descendants = {name for name, info in deps.items() if info["parent"] in selected} - selected - excluded
         if not descendants:
             break
         selected |= descendants
@@ -147,13 +154,19 @@ def main() -> int:
         action="store_true",
         help="Also include the parents of selected containers.",
     )
+    closure_parser.add_argument(
+        "--exclude",
+        nargs="*",
+        default=[],
+        help="Containers the descendant expansion must not cascade into.",
+    )
     subparsers.add_parser("tree", help="Print the container hierarchy.")
     args = parser.parse_args()
 
     containers_dir = Path(__file__).resolve().parent.parent / "containers"
     if args.command == "closure":
         try:
-            result: object = closure(containers_dir, args.containers, args.expand_parents)
+            result: object = closure(containers_dir, args.containers, args.expand_parents, args.exclude)
         except ValueError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
