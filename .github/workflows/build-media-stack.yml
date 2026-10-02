@@ -1,0 +1,11 @@
+name: Build Media Stack
+
+# TEMP: stub that only makes the workflow dispatchable, run it on the branch that carries the real definition
+on:
+  workflow_dispatch:
+
+jobs:
+  stub:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - run: echo "Dispatch this workflow on the branch that carries its real definition."
