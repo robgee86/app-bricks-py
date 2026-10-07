@@ -51,7 +51,7 @@ task init
 
 uv provides Python 3.13, creates `.venv` and installs the library with its development dependencies, exactly the versions pinned in `uv.lock`, then does the same for every container (see [Dependencies](#dependencies)). Every task runs inside that environment through `uv run`, there is nothing to activate. `task init:bricks` sets up the library alone.
 
-Tasks are named `<intent>:<component>`: the intent is one of `init`, `deps`, `test`, `build`, `check`, `fix`, `new` and `show`, the component is `bricks` (the library) or `containers`, and a bare intent covers both. The `board:*` tasks of `Taskfile.board.yml` are the exception: they wrap [arduino-board-tool](https://github.com/arduino/arduino-board-tool) to test a branch on a real board, see [Testing](#testing). `check:*` tasks only verify and fail, `fix:*` tasks apply the same rules. `task --list` shows them all, and every one of them runs on a developer machine: the tasks that only make sense in CI, installing system packages on the workflow image, live in `Taskfile.ci.yml`, which the workflows run with `task -t Taskfile.ci.yml`.
+Tasks are named `<intent>:<component>`: the intent is one of `init`, `deps`, `test`, `build`, `check`, `fix`, `new` and `show`, the component is `bricks` (the library) or `containers`, and a bare intent covers both. The `board:*` tasks of `Taskfile.board.yml` are the exception: they wrap [arduino-board-tool](https://github.com/arduino/arduino-board-tool) to test a branch on a real board, see [Testing](#on-a-board). `check:*` tasks only verify and fail, `fix:*` tasks apply the same rules. `task --list` shows them all, and every one of them runs on a developer machine: the tasks that only make sense in CI, installing system packages on the workflow image, live in `Taskfile.ci.yml`, which the workflows run with `task -t Taskfile.ci.yml`.
 
 ## Linting and formatting
 
@@ -137,16 +137,16 @@ Development containers are published by the dev CI (`dev-release.yml`) tagged as
 
 ### On a board
 
-Behavior that needs real hardware or the real containers runtime is tested on a board through [arduino-board-tool](https://github.com/arduino/arduino-board-tool), installed on the developer machine and reaching the board over SSH. The `board:*` tasks add what only this repository knows, which images a brick needs:
+Behavior that needs real hardware or the real containers runtime is tested on a board through [arduino-board-tool](https://github.com/arduino/arduino-board-tool), installed on the developer machine and reaching the board over SSH. The `board:*` tasks wrap it with this repository's defaults:
 
 ```sh
-task board:push BOARD=<ssh alias> BRICK=video_objectdetection PLATFORM=ventunoq   # wheel and images from this checkout, pushed to the registry on the board
+task board:push BOARD=<ssh alias>                                                 # wheel and every image from this checkout, pushed to the registry on the board; only changed layers travel
 task board:run BOARD=<ssh alias> TAG=<branch> DIR=./bt-mytest                    # run a test app until its marker and get the log of this run
 task board:examples BOARD=<ssh alias> BRICK=video_objectdetection                # the shipped examples declaring the brick
 task board:cleanup BOARD=<ssh alias> TAG=<branch> BRICK=video_objectdetection    # remove what the session left, scoped to the tag and brick
 ```
 
-`task build:containers` builds the images locally for the same purpose: `REGISTRY`, `IMAGE_TAG` and `BASE_IMAGE_VERSION` name them, the result is loaded into Docker without attestations, and the commit is stamped in the `org.opencontainers.image.revision` label. The release workflows publish the images with their SBOM attestations through bake-action instead.
+The first push builds every container once and moves it across; from then on an unchanged image costs a manifest check. `task build:containers` builds the images locally for the same purpose: `REGISTRY`, `IMAGE_TAG` and `BASE_IMAGE_VERSION` name them, the result is loaded into Docker without attestations, and the commit is stamped in the `org.opencontainers.image.revision` label. The release workflows publish the images with their SBOM attestations through bake-action instead.
 
 ## Pyright checks
 
