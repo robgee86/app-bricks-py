@@ -32,7 +32,7 @@ CONFIG_FILE = "brick_config.yaml"
 BASE_TARGET = "python-apps-base"
 MODELS_TARGET = "models-downloader"
 REPO_IMAGE_PATTERN = re.compile(r"image:\s*\S*app-bricks/([a-z0-9-]+):")
-EXTERNAL_IMAGE_PATTERN = re.compile(r"image:\s*([a-z0-9.-]+/\S+)")
+IMAGE_PATTERN = re.compile(r"image:\s*(\S+)")
 
 NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 CATEGORIES = ("ai", "audio", "image", "miscellaneous", "storage", "text", "ui", "video")
@@ -116,7 +116,7 @@ def images(repo_root: Path, bricks: dict[str, dict], name: str, platform: str | 
     for file in files:
         text = file.read_text(encoding="utf-8")
         targets += [t for t in REPO_IMAGE_PATTERN.findall(text) if t not in targets]
-        external += [i for i in EXTERNAL_IMAGE_PATTERN.findall(text) if "app-bricks/" not in i and i not in external]
+        external += [i for i in IMAGE_PATTERN.findall(text) if "app-bricks/" not in i and i not in external]
     return targets, external
 
 
