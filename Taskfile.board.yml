@@ -16,7 +16,7 @@ tasks:
       - "{{.TOOL}} preflight"
 
   push:
-    desc: "Build and push the images a brick needs from this checkout: task board:push BOARD=<alias> BRICK=<name> [PLATFORM=<key>] [TAG=<tag>]"
+    desc: "Build and push the images a brick needs from this checkout, every runner its compose files reference regardless of model conditions: task board:push BOARD=<alias> BRICK=<name> [PLATFORM=<key>] [TAG=<tag>]"
     requires: { vars: [BOARD] }
     vars:
       TARGETS:

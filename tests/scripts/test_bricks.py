@@ -55,7 +55,9 @@ def repo_with_runners(repo: Path) -> Path:
     (services / "genie").mkdir(parents=True)
     (services / "genie" / "service_compose.yaml").write_text("services:\n  genie:\n    image: artifacts.codelinaro.org/iot/genai:1.5.0\n")
     (services / "llamacpp").mkdir()
-    (services / "llamacpp" / "service_compose.yaml").write_text("services:\n  llamacpp:\n    " + image % "llamacpp-runner")
+    (services / "llamacpp" / "service_compose.yaml").write_text(
+        "services:\n  llamacpp:\n    " + image % "llamacpp-runner" + "  db:\n    image: influxdb:2.7\n"
+    )
     return repo
 
 
@@ -65,7 +67,7 @@ def test_images_lists_the_bake_targets_a_brick_needs(repo_with_runners: Path) ->
     assert targets == ["python-apps-base", "models-downloader", "ei-qnn-models-runner", "llamacpp-runner"], (
         "platform variant, services, no duplicates"
     )
-    assert external == ["artifacts.codelinaro.org/iot/genai:1.5.0"]
+    assert external == ["artifacts.codelinaro.org/iot/genai:1.5.0", "influxdb:2.7"], "fixed-registry and Docker Hub images alike"
     targets, _ = images(repo_with_runners, bricks, "llm", None)
     assert "ei-models-runner" in targets and "ei-qnn-models-runner" in targets, "no platform: every variant"
     assert images(repo_with_runners, bricks, "wave_generator", "ventunoq") == (["python-apps-base"], [])
