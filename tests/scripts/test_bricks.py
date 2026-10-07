@@ -17,7 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.bricks import BRICKS_DIR, TESTS_DIR, BricksError, describe, list_text, load_bricks, main, scaffold  # noqa: E402
+from scripts.bricks import BRICKS_DIR, SERVICES_DIR, TESTS_DIR, BricksError, describe, images, list_text, load_bricks, main, scaffold  # noqa: E402
 
 
 @pytest.fixture
@@ -39,6 +39,38 @@ def repo(tmp_path: Path) -> Path:
     (bricks / "_shared").mkdir()
     (tmp_path / TESTS_DIR / "llm").mkdir(parents=True)
     return tmp_path
+
+
+@pytest.fixture
+def repo_with_runners(repo: Path) -> Path:
+    bricks = repo / BRICKS_DIR
+    image = "image: ${DOCKER_REGISTRY_BASE:-ghcr.io/arduino/}app-bricks/%s:__BRICKS_RELEASE_VERSION__\n"
+    (bricks / "llm" / "brick_compose.yaml").write_text("services:\n  runner:\n    " + image % "ei-models-runner")
+    (bricks / "llm" / "brick_compose.ventunoq.yaml").write_text("services:\n  runner:\n    " + image % "ei-qnn-models-runner")
+    config = yaml.safe_load((bricks / "llm" / "brick_config.yaml").read_text())
+    config["model"] = "some-model"
+    config["requires_services"] = [{"id": "arduino:genie", "when": {"model": "genie:*"}}, "arduino:llamacpp"]
+    (bricks / "llm" / "brick_config.yaml").write_text(yaml.safe_dump(config))
+    services = repo / SERVICES_DIR
+    (services / "genie").mkdir(parents=True)
+    (services / "genie" / "service_compose.yaml").write_text("services:\n  genie:\n    image: artifacts.codelinaro.org/iot/genai:1.5.0\n")
+    (services / "llamacpp").mkdir()
+    (services / "llamacpp" / "service_compose.yaml").write_text("services:\n  llamacpp:\n    " + image % "llamacpp-runner")
+    return repo
+
+
+def test_images_lists_the_bake_targets_a_brick_needs(repo_with_runners: Path) -> None:
+    bricks = load_bricks(repo_with_runners / BRICKS_DIR)
+    targets, external = images(repo_with_runners, bricks, "llm", "ventunoq")
+    assert targets == ["python-apps-base", "models-downloader", "ei-qnn-models-runner", "llamacpp-runner"], (
+        "platform variant, services, no duplicates"
+    )
+    assert external == ["artifacts.codelinaro.org/iot/genai:1.5.0"]
+    targets, _ = images(repo_with_runners, bricks, "llm", None)
+    assert "ei-models-runner" in targets and "ei-qnn-models-runner" in targets, "no platform: every variant"
+    assert images(repo_with_runners, bricks, "wave_generator", "ventunoq") == (["python-apps-base"], [])
+    with pytest.raises(BricksError, match="Unknown brick"):
+        images(repo_with_runners, bricks, "nope", None)
 
 
 def test_list_reads_every_brick_config(repo: Path) -> None:
