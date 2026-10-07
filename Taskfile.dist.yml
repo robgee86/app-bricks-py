@@ -5,6 +5,10 @@ version: "3"
 # intent covers both. check:* tasks only verify and exit non-zero, fix:* tasks apply the same rules.
 # Every task here runs on a developer machine. What runs only in CI lives in Taskfile.ci.yml.
 
+includes:
+  board:
+    taskfile: Taskfile.board.yml
+
 tasks:
   # init: set up the development environment, a .venv per component with the locked dependencies
 
