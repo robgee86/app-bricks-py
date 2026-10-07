@@ -1,9 +1,8 @@
 version: "3"
 
 # Board testing through arduino-board-tool (github.com/arduino/arduino-board-tool), one wrapper per
-# operation so the brick-to-image mapping of this repository stays here. Variables: BOARD (SSH alias,
-# required), TAG (dev image tag, default the branch name), BRICK (brick directory name), PLATFORM
-# (board platform key selecting the compose variant, e.g. ventunoq).
+# operation with this repository's defaults. Variables: BOARD (SSH alias, required), TAG (dev image
+# tag, default the branch name), BRICK (brick directory name).
 
 vars:
   TOOL: arduino-board-tool --board {{.BOARD}}{{if .TAG}} --tag {{.TAG}}{{end}}
@@ -16,13 +15,10 @@ tasks:
       - "{{.TOOL}} preflight"
 
   push:
-    desc: "Build and push the images a brick needs from this checkout, every runner its compose files reference regardless of model conditions: task board:push BOARD=<alias> BRICK=<name> [PLATFORM=<key>] [TAG=<tag>]"
+    desc: "Build the wheel and every container image from this checkout and push them to the board registry: task board:push BOARD=<alias> [TAG=<tag>] [TARGETS=<bake targets, comma separated>]"
     requires: { vars: [BOARD] }
-    vars:
-      TARGETS:
-        sh: '{{if .BRICK}}uv run python -m scripts.bricks images {{.BRICK}}{{if .PLATFORM}} --platform {{.PLATFORM}}{{end}}{{else}}echo python-apps-base{{end}}'
     cmds:
-      - "{{.TOOL}} push --source . --targets {{.TARGETS | splitList \" \" | join \",\"}}"
+      - "{{.TOOL}} push --source .{{if .TARGETS}} --targets {{.TARGETS}}{{end}}"
 
   run:
     desc: "Run an app folder or an example until its marker: task board:run BOARD=<alias> TAG=<tag> DIR=<folder> | APP=examples:<path> [MARKER=<regex>]"
