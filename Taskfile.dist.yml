@@ -100,9 +100,12 @@ tasks:
       - uv run --group build arduino-bricks-release --static-dir src/arduino/app_bricks/static --api-docs-dir docs
 
   build:containers:
-    desc: Build the container images with docker buildx bake, pass -- <names> for a subset (parents are built too)
+    desc: Build the container images locally with docker buildx bake and load them into Docker, pass -- <names> for a subset (parents are built too); REGISTRY, IMAGE_TAG and BASE_IMAGE_VERSION name the images
+    env:
+      GITHUB_SHA:
+        sh: echo "${GITHUB_SHA:-$(git rev-parse HEAD)$(git diff --quiet HEAD -- . ':!dist' 2>/dev/null || echo -dirty)}"
     cmds:
-      - docker buildx bake {{.CLI_ARGS}}
+      - docker buildx bake --load --sbom=false --provenance=false {{.CLI_ARGS}}
 
   build:containers:sbom:
     desc: Generate the delta SBOMs of the published containers (requires syft and registry access)
