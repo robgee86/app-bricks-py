@@ -1,0 +1,43 @@
+version: "3"
+
+# Board testing through arduino-board-tool (github.com/arduino/arduino-board-tool), one wrapper per
+# operation so the brick-to-image mapping of this repository stays here. Variables: BOARD (SSH alias,
+# required), TAG (dev image tag, default the branch name), BRICK (brick directory name), PLATFORM
+# (board platform key selecting the compose variant, e.g. ventunoq).
+
+vars:
+  TOOL: arduino-board-tool --board {{.BOARD}}{{if .TAG}} --tag {{.TAG}}{{end}}
+
+tasks:
+  preflight:
+    desc: "Board state as facts: task board:preflight BOARD=<alias> [TAG=<tag>]"
+    requires: { vars: [BOARD] }
+    cmds:
+      - "{{.TOOL}} preflight"
+
+  push:
+    desc: "Build and push the images a brick needs from this checkout: task board:push BOARD=<alias> BRICK=<name> [PLATFORM=<key>] [TAG=<tag>]"
+    requires: { vars: [BOARD] }
+    vars:
+      TARGETS:
+        sh: '{{if .BRICK}}uv run python -m scripts.bricks images {{.BRICK}}{{if .PLATFORM}} --platform {{.PLATFORM}}{{end}}{{else}}echo python-apps-base{{end}}'
+    cmds:
+      - "{{.TOOL}} push --source . --targets {{.TARGETS | splitList \" \" | join \",\"}}"
+
+  run:
+    desc: "Run an app folder or an example until its marker: task board:run BOARD=<alias> TAG=<tag> DIR=<folder> | APP=examples:<path> [MARKER=<regex>]"
+    requires: { vars: [BOARD] }
+    cmds:
+      - "{{.TOOL}} run{{if .DIR}} --dir {{.DIR}}{{end}}{{if .MARKER}} --marker '{{.MARKER}}'{{end}} {{.APP}}"
+
+  examples:
+    desc: "List the shipped examples declaring a brick: task board:examples BOARD=<alias> BRICK=<name>"
+    requires: { vars: [BOARD, BRICK] }
+    cmds:
+      - "{{.TOOL}} examples --brick {{.BRICK}}"
+
+  cleanup:
+    desc: "Remove what the session left on the board: task board:cleanup BOARD=<alias> TAG=<tag> [BRICK=<name>] [DRY=1]"
+    requires: { vars: [BOARD] }
+    cmds:
+      - "{{.TOOL}} cleanup{{if .BRICK}} --brick {{.BRICK}}{{end}}{{if .DRY}} --dry-run{{end}}"

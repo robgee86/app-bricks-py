@@ -6,6 +6,7 @@
 
   python3 -m scripts.bricks list
   python3 -m scripts.bricks show wave_generator
+  python3 -m scripts.bricks images video_objectdetection --platform ventunoq
   python3 -m scripts.bricks new my_brick --name "My Brick" --desc "What it does" --category audio
 
 A brick is a package under src/arduino/app_bricks/<name>/ with a brick_config.yaml, a README.md
@@ -23,8 +24,15 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BRICKS_DIR = Path("src/arduino/app_bricks")
+SERVICES_DIR = Path("src/arduino/app_services")
 TESTS_DIR = Path("tests/arduino/app_bricks")
 CONFIG_FILE = "brick_config.yaml"
+
+# The image carrying the wheel and the one the App CLI runs before any brick with a model.
+BASE_TARGET = "python-apps-base"
+MODELS_TARGET = "models-downloader"
+REPO_IMAGE_PATTERN = re.compile(r"image:\s*\S*app-bricks/([a-z0-9-]+):")
+EXTERNAL_IMAGE_PATTERN = re.compile(r"image:\s*([a-z0-9.-]+/\S+)")
 
 NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 CATEGORIES = ("ai", "audio", "image", "miscellaneous", "storage", "text", "ui", "video")
@@ -81,6 +89,35 @@ def describe(repo_root: Path, bricks: dict[str, dict], name: str) -> str:
         f"  tests:       {TESTS_DIR / name if (repo_root / TESTS_DIR / name).is_dir() else '-'}",
     ]
     return "\n".join(lines)
+
+
+def compose_files(directory: Path, prefix: str, platform: str | None) -> list[Path]:
+    """The compose files a board uses: the platform variant when it exists, else the default; every variant without a platform."""
+    if platform is None:
+        return sorted(directory.glob(f"{prefix}*.yaml"))
+    variant = directory / f"{prefix}.{platform}.yaml"
+    default = directory / f"{prefix}.yaml"
+    return [variant] if variant.is_file() else [default] if default.is_file() else []
+
+
+def images(repo_root: Path, bricks: dict[str, dict], name: str, platform: str | None) -> tuple[list[str], list[str]]:
+    """The bake targets a brick needs on a board and the fixed-registry images it also pulls."""
+    if name not in bricks:
+        raise BricksError(f"Unknown brick '{name}', see `list`.")
+    config = bricks[name]
+    files = compose_files(repo_root / BRICKS_DIR / name, "brick_compose", platform)
+    for service in config.get("requires_services") or []:
+        service_id = service["id"] if isinstance(service, dict) else service
+        files += compose_files(repo_root / SERVICES_DIR / service_id.split(":")[-1], "service_compose", platform)
+    targets = [BASE_TARGET]
+    if config.get("model") or config.get("model_by_boards"):
+        targets.append(MODELS_TARGET)
+    external: list[str] = []
+    for file in files:
+        text = file.read_text(encoding="utf-8")
+        targets += [t for t in REPO_IMAGE_PATTERN.findall(text) if t not in targets]
+        external += [i for i in EXTERNAL_IMAGE_PATTERN.findall(text) if "app-bricks/" not in i and i not in external]
+    return targets, external
 
 
 def class_name(name: str) -> str:
@@ -195,6 +232,11 @@ def create_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("list", help="Print every brick with its category and display name.")
     show_parser = subparsers.add_parser("show", help="Print the configuration and files of one brick.")
     show_parser.add_argument("name")
+    images_parser = subparsers.add_parser(
+        "images", help="Print the bake targets a brick needs on a board, one line; fixed-registry images go to stderr."
+    )
+    images_parser.add_argument("name")
+    images_parser.add_argument("--platform", help="Board platform key selecting the compose variant, e.g. ventunoq; every variant without it.")
     new_parser = subparsers.add_parser("new", help="Scaffold a brick package and its test directory.")
     new_parser.add_argument("name", help="Brick name, a lowercase Python identifier like my_brick.")
     new_parser.add_argument("--name", dest="display_name", help="Display name, defaults to the name in title case.")
@@ -213,6 +255,12 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  {index}. {step}")
             return 0
         bricks = load_bricks(args.repo_root / BRICKS_DIR)
+        if args.command == "images":
+            targets, external = images(args.repo_root, bricks, args.name, args.platform)
+            print(" ".join(targets))
+            if external:
+                print(f"External images, pulled as they are: {', '.join(external)}", file=sys.stderr)
+            return 0
         print(list_text(bricks) if args.command == "list" else describe(args.repo_root, bricks, args.name))
     except BricksError as error:
         print(f"Error: {error}", file=sys.stderr)
