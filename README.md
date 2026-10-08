@@ -51,7 +51,7 @@ task init
 
 uv provides Python 3.13, creates `.venv` and installs the library with its development dependencies, exactly the versions pinned in `uv.lock`, then does the same for every container (see [Dependencies](#dependencies)). Every task runs inside that environment through `uv run`, there is nothing to activate. `task init:bricks` sets up the library alone.
 
-Tasks are named `<intent>:<component>`: the intent is one of `init`, `deps`, `test`, `build`, `check`, `fix`, `new` and `show`, the component is `bricks` (the library) or `containers`, and a bare intent covers both. The `board:*` tasks of `Taskfile.board.yml` are the exception: they wrap [arduino-test-buddy](https://github.com/arduino/arduino-test-buddy) to test a branch on a real board, see [Testing](#on-a-board). `check:*` tasks only verify and fail, `fix:*` tasks apply the same rules. `task --list` shows them all, and every one of them runs on a developer machine: the tasks that only make sense in CI, installing system packages on the workflow image, live in `Taskfile.ci.yml`, which the workflows run with `task -t Taskfile.ci.yml`.
+Tasks are named `<intent>:<component>`: the intent is one of `init`, `deps`, `test`, `build`, `check`, `fix`, `new` and `show`, the component is `bricks` (the library) or `containers`, and a bare intent covers both. The `board:*` tasks of `Taskfile.board.yml` are the exception: they wrap [arduino-test-buddy](https://github.com/robgee86/arduino-test-buddy) to test a branch on a real board, see [Testing](#on-a-board). `check:*` tasks only verify and fail, `fix:*` tasks apply the same rules. `task --list` shows them all, and every one of them runs on a developer machine: the tasks that only make sense in CI, installing system packages on the workflow image, live in `Taskfile.ci.yml`, which the workflows run with `task -t Taskfile.ci.yml`.
 
 ## Linting and formatting
 
@@ -137,7 +137,7 @@ Development containers are published by the dev CI (`dev-release.yml`) tagged as
 
 ### On a board
 
-Behavior that needs real hardware or the real containers runtime is tested on a board through [arduino-test-buddy](https://github.com/arduino/arduino-test-buddy), installed on the developer machine and reaching the board over SSH. The `board:*` tasks wrap it with this repository's defaults:
+Behavior that needs real hardware or the real containers runtime is tested on a board through [arduino-test-buddy](https://github.com/robgee86/arduino-test-buddy), installed on the developer machine and reaching the board over SSH. The `board:*` tasks wrap it with this repository's defaults:
 
 ```sh
 task board:push BOARD=<ssh alias>                                                 # wheel and every image from this checkout, pushed to the registry on the board; only changed layers travel
