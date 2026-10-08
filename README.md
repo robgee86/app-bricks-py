@@ -140,10 +140,12 @@ Development containers are published by the dev CI (`dev-release.yml`) tagged as
 Behavior that needs real hardware or the real containers runtime is tested on a board through [arduino-test-buddy](https://github.com/robgee86/arduino-test-buddy), installed on the developer machine and reaching the board over SSH. The `board:*` tasks wrap it with this repository's defaults:
 
 ```sh
+arduino-test-buddy up                                                             # start the tool's registry and builder, nothing runs before
 task board:push                                                                   # wheel and every image from this checkout, pushed to the registry on this machine
 task board:run BOARD=<ssh alias> TAG=<branch> DIR=./bt-mytest                    # run a test app until its marker and get the log of this run
 task board:examples BOARD=<ssh alias> BRICK=video_objectdetection                # the shipped examples declaring the brick
 task board:cleanup BOARD=<ssh alias> TAG=<branch> BRICK=video_objectdetection    # remove what the session left, scoped to the tag and brick
+arduino-test-buddy down                                                           # stop both containers, the data stays
 ```
 
 Each board pulls only the images its apps use, through a tunnel that lives for one run, so one push serves every board and sessions on the same board take turns. The first push builds every container once; from then on only changed layers are rebuilt. `task build:containers` builds the images locally for the same purpose: `REGISTRY`, `IMAGE_TAG` and `BASE_IMAGE_VERSION` name them, the result is loaded into Docker without attestations, or pushed to `REGISTRY` with `PUSH=1`, and the commit is stamped in the `org.opencontainers.image.revision` label. The release workflows publish the images with their SBOM attestations through bake-action instead.
