@@ -1,6 +1,6 @@
 version: "3"
 
-# Board testing through arduino-test-buddy (github.com/arduino/arduino-test-buddy), one wrapper per
+# Board testing through arduino-test-buddy (github.com/robgee86/arduino-test-buddy), one wrapper per
 # operation with this repository's defaults. Variables: BOARD (SSH alias, required), TAG (dev image
 # tag, default the branch name), BRICK (brick directory name).
 
