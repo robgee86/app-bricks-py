@@ -1,8 +1,8 @@
 version: "3"
 
 # Board testing through arduino-test-buddy (github.com/robgee86/arduino-test-buddy), one wrapper per
-# operation with this repository's defaults. Variables: BOARD (SSH alias, required), TAG (dev image
-# tag, default the branch name), BRICK (brick directory name).
+# operation with this repository's defaults. Variables: BOARD (SSH alias, required on the board tasks),
+# TAG (dev image tag, default the branch name), BRICK (brick directory name).
 
 vars:
   TOOL: arduino-test-buddy --board {{.BOARD}}{{if .TAG}} --tag {{.TAG}}{{end}}
@@ -15,10 +15,9 @@ tasks:
       - "{{.TOOL}} preflight"
 
   push:
-    desc: "Build the wheel and every container image from this checkout and push them to the board registry: task board:push BOARD=<alias> [TAG=<tag>] [TARGETS=<bake targets, comma separated>]"
-    requires: { vars: [BOARD] }
+    desc: "Build the wheel and every container image from this checkout and push them to the registry on this machine, which every board pulls from: task board:push [TAG=<tag>] [TARGETS=<bake targets, comma separated>]"
     cmds:
-      - "{{.TOOL}} push --source .{{if .TARGETS}} --targets {{.TARGETS}}{{end}}"
+      - "arduino-test-buddy{{if .TAG}} --tag {{.TAG}}{{end}} push --source .{{if .TARGETS}} --targets {{.TARGETS}}{{end}}"
 
   run:
     desc: "Run an app folder or an example until its marker: task board:run BOARD=<alias> TAG=<tag> DIR=<folder> | APP=examples:<path> [MARKER=<regex>]"
