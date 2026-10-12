@@ -6,6 +6,10 @@
 
 OPENCV_DEBUG=0
 
+# Until the app is exec'd this shell is PID 1, which ignores signals without a
+# handler: a stop during the provisioning would wait for the kill timeout.
+trap 'exit 143' TERM INT
+
 # Disable core dumps: inherited by python and any native library it loads.
 # Set ENABLE_CORE_DUMPS=1 to keep them (e.g. to debug a native crash).
 if [ "${ENABLE_CORE_DUMPS:-0}" != "1" ]; then
@@ -27,6 +31,8 @@ INSTALLED_REQUIREMENTS_FILE="$CACHE_DIR/installed_requirements.txt"
 # Set when a dependency install fails: only `prepare` acts on it, starting the
 # app stays best-effort as before.
 DEPS_FAILED=0
+# Set when something was installed: the uv cache is worth cleaning only then.
+DEPS_INSTALLED=0
 
 export UV_CACHE_DIR="$CACHE_DIR/uv"
 
@@ -95,6 +101,7 @@ if [ -d "$PYTHON_LIBS_DIR" ]; then
     if [ -f "$whl_file" ]; then
       uv pip install --compile-bytecode "$whl_file"
       mv "$whl_file" "$whl_file".installed
+      DEPS_INSTALLED=1
     fi
   done
 fi
@@ -112,6 +119,7 @@ if [ -f "$REQUIREMENTS_FILE" ]; then
     if [ "$REQUIREMENTS_LINES" -ne 0 ]; then
       if uv pip install --compile-bytecode -r "$REQUIREMENTS_FILE"; then
         cp "$REQUIREMENTS_FILE" "$INSTALLED_REQUIREMENTS_FILE"
+        DEPS_INSTALLED=1
       else
         DEPS_FAILED=1
       fi
@@ -119,8 +127,6 @@ if [ -f "$REQUIREMENTS_FILE" ]; then
       cp "$REQUIREMENTS_FILE" "$INSTALLED_REQUIREMENTS_FILE"
     fi
   fi
-  # clean up cache
-  uv cache clean
 fi
 
 # Install custom brick requirements with caching
@@ -150,6 +156,7 @@ if [ -d "$BASE_DIR/bricks" ]; then
             echo "Installing requirements for brick: $brick_name"
             if uv pip install --compile-bytecode -r "$brick_requirements"; then
               cp "$brick_requirements" "$brick_installed_requirements"
+              DEPS_INSTALLED=1
             else
               DEPS_FAILED=1
             fi
@@ -160,8 +167,9 @@ if [ -d "$BASE_DIR/bricks" ]; then
       fi
     fi
   done
-  
-  # clean up cache after all brick installs
+fi
+
+if [ "$DEPS_INSTALLED" -ne 0 ]; then
   uv cache clean
 fi
 
