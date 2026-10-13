@@ -8,7 +8,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any
 
-from arduino.app_utils.apphome import app_path
+from arduino.app_utils.apphome import app_folder
 from arduino.app_utils.utils import get_board_name
 
 application_config_file_name: str = "app.yaml"
@@ -26,7 +26,7 @@ def _read_yaml(path: str) -> Any:  # noqa: ANN401
 
 def get_app_config() -> dict[str, Any] | None:
     """Gets app.yaml application configuration, from the app folder or else from the parent of the main script folder."""
-    config_path = app_path(application_config_file_name)
+    config_path = app_folder(application_config_file_name)
     if not os.path.exists(config_path):
         main_file = getattr(sys.modules["__main__"], "__file__", None)
         if not main_file:

@@ -6,26 +6,17 @@
 
 import os
 
-DEFAULT_APP_ROOT = "/app"
+DEFAULT_APP_FOLDER = "/app"
 
 
-def app_root() -> str:
-    """Returns the folder of the running app.
-
-    Returns:
-        str: APP_HOME when it names an existing folder, else "/app", where the classic container mounts the app.
-    """
-    home = os.environ.get("APP_HOME")
-    return home if home and os.path.isdir(home) else DEFAULT_APP_ROOT
-
-
-def app_path(*parts: str) -> str:
-    """Returns a path inside the folder of the running app.
+def app_folder(*parts: str) -> str:
+    """Returns the folder of the running app, or a path inside it.
 
     Args:
-        *parts (str): The path components below the app folder.
+        *parts (str): The path components below the app folder, none for the folder itself.
 
     Returns:
-        str: The joined path.
+        str: The path under APP_HOME when it names an existing folder, else under "/app", where the classic container mounts the app.
     """
-    return os.path.join(app_root(), *parts)
+    home = os.environ.get("APP_HOME")
+    return os.path.join(home if home and os.path.isdir(home) else DEFAULT_APP_FOLDER, *parts)

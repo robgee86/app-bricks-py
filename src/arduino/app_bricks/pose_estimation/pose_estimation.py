@@ -19,7 +19,7 @@ import websockets
 
 from arduino.app_peripherals.camera import BaseCamera, Camera
 from arduino.app_utils import brick, Logger
-from arduino.app_utils.apphome import app_path
+from arduino.app_utils.apphome import app_folder
 from arduino.app_utils.image.adjustments import compress_to_jpeg
 from arduino.app_internal.core.module import load_brick_compose_file, resolve_address
 
@@ -125,7 +125,7 @@ class PoseEstimation:
                 in `custom_poses_dir` carries the name of a built-in pose or is not a valid pose name.
             RuntimeError: If the model runner host address could not be resolved.
         """
-        self._custom_poses_dir = Path(app_path("poses") if custom_poses_dir is None else custom_poses_dir)
+        self._custom_poses_dir = Path(app_folder("poses") if custom_poses_dir is None else custom_poses_dir)
         self._pose_specs = parse_poses(poses, BUILTIN_POSE_NAMES, custom_folders(self._custom_poses_dir, BUILTIN_POSE_NAMES))
         self._camera = camera if camera else Camera(fps=30)
         self._confidence = confidence

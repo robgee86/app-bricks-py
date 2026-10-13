@@ -13,10 +13,10 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization
 from datetime import datetime, timedelta, UTC
 
-from arduino.app_utils.apphome import app_path
+from arduino.app_utils.apphome import app_folder
 
 
-DEFAULT_CERTS_DIR = app_path("certs")
+DEFAULT_CERTS_DIR = app_folder("certs")
 """The certs folder of the app, shared by all bricks."""
 
 
