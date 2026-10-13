@@ -6,7 +6,6 @@ import json
 import os
 import shutil
 import signal
-import socket
 import subprocess
 import sys
 import tempfile
@@ -50,12 +49,6 @@ echo prepared >> "$APP_DIR/prepared.marker"
 """
 
 
-def free_port():
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 def wait_until(condition, timeout=5.0, details=lambda: ""):
     deadline = time.monotonic() + timeout
     while not (result := condition()):
@@ -69,7 +62,7 @@ def short_folder():
     return Path(tempfile.mkdtemp(prefix="launcher", dir="/tmp")).resolve()
 
 
-def spawn(root, preload="json", ports=""):
+def spawn(root, preload="json"):
     modules = root / "modules"
     (modules / "streamlit").mkdir(parents=True, exist_ok=True)
     (modules / "streamlit" / "__init__.py").touch()
@@ -82,7 +75,6 @@ def spawn(root, preload="json", ports=""):
         "PYTHONPATH": str(modules),
         "APP_LAUNCHER_PRELOAD": preload,
         "APP_LAUNCHER_SOCKET": str(root / "launcher.sock"),
-        "APP_LAUNCHER_PORTS": ports,
         "APP_LAUNCHER_STOP_TIMEOUT_S": "1",
         "APP_LAUNCHER_RUN_SH": str(run_sh),
         "GREETING": "from the launcher",
@@ -95,12 +87,10 @@ def spawn(root, preload="json", ports=""):
 
 
 class Launcher:
-    def __init__(self, root: Path, ports=None):
+    def __init__(self, root: Path):
         self.root = root
         self.socket = str(root / "launcher.sock")
-        self.ports = [free_port()] if ports is None else ports
-        self.port = self.ports[0] if self.ports else None
-        self.process = spawn(root, ports=",".join(map(str, self.ports)))
+        self.process = spawn(root)
         wait_until(self.answers, details=lambda: (root / "launcher.log").read_text())
 
     def answers(self):
@@ -155,17 +145,17 @@ def log_of(app, until=""):
 
 def test_runs_an_app_until_stopped(launcher):
     app = launcher.app("hello")
-    started = launcher.request({"cmd": "start", "app": str(app), "env": {"GREETING": "hi"}, "mode": "replace"})
+    started = launcher.request({"cmd": "start", "app": str(app), "env": {"GREETING": "hi"}, "mode": "replace", "ports": [8080, 7000]})
     assert started["ok"] and started["warm"] and started["runner"] == "python" and not started["prepared"]
-    assert started["ports"] == {str(launcher.port): launcher.port + 10000}
+    assert started["ports"] == {"8080": 18080, "7000": 17000}
     assert set(started["timings"]) == {"stop_ms", "prepare_ms", "fork_ms"}
 
     status = launcher.request({"cmd": "status"})
     child = {"app": str(app), "pid": started["pid"], "state": "running", "started_at": started["started_at"], "runner": "python", "warm": True}
-    assert status["children"] == [{**child, "ports": {str(launcher.port): launcher.port + 10000}}]
+    assert status["children"] == [{**child, "ports": {"8080": 18080, "7000": 17000}}]
     assert status["preload"] == {"modules": ["json"], "failed": []}
 
-    assert log_of(app) == f"hello from __main__ {app}/python/main.py ARDUINO_APP_PORT_{launcher.port}={launcher.port + 10000} hi yes\n"
+    assert log_of(app) == f"hello from __main__ {app}/python/main.py ARDUINO_APP_PORT_7000=17000 ARDUINO_APP_PORT_8080=18080 hi yes\n"
 
     stopped = launcher.request({"cmd": "stop", "app": str(app)})
     assert stopped == {"ok": True, "stopped": [{"app": str(app), "pid": started["pid"], "exit_code": None, "signal": signal.SIGTERM}]}
@@ -190,15 +180,29 @@ def test_replace_stops_the_running_app_first(launcher):
 
 
 def test_runs_streamlit_apps_through_streamlit_on_the_port_the_brick_declares(launcher):
-    # The launcher does not forward the declared port, so Streamlit binds it directly
     declared = yaml.safe_load(STREAMLIT_UI_CONFIG.read_text())["ports"][0]
-    assert declared not in launcher.ports
     app = launcher.app("dashboard", app_yaml="bricks:\n  - arduino:streamlit_ui: {}\n")
-    started = launcher.request({"cmd": "start", "app": str(app)})
+    started = launcher.request({"cmd": "start", "app": str(app), "ports": [declared]})
     assert (started["warm"], started["runner"], started["prepared"]) == (False, "streamlit", True)
-    streamlit = f"streamlit run --server.port {declared} {app}/python/main.py {app}\n"
+    streamlit = f"streamlit run --server.port {declared + 10000} --browser.serverPort {declared} {app}/python/main.py {app}\n"
     assert log_of(app, until=streamlit).endswith(streamlit)
     assert launcher.request({"cmd": "stop"})["stopped"][0]["signal"] == signal.SIGTERM
+
+
+def test_streamlit_binds_the_declared_port_directly_when_the_app_does_not_list_it(launcher):
+    declared = yaml.safe_load(STREAMLIT_UI_CONFIG.read_text())["ports"][0]
+    app = launcher.app("unlisted", app_yaml="bricks:\n  - arduino:streamlit_ui: {}\n")
+    assert launcher.request({"cmd": "start", "app": str(app)})["ports"] == {}
+    streamlit = f"streamlit run --server.port {declared} {app}/python/main.py {app}\n"
+    assert log_of(app, until=streamlit).endswith(streamlit)
+    launcher.request({"cmd": "stop"})
+
+
+def test_an_app_without_ports_gets_no_port_variable(launcher):
+    app = launcher.app("portless")
+    assert launcher.request({"cmd": "start", "app": str(app)})["ports"] == {}
+    assert log_of(app) == f"hello from __main__ {app}/python/main.py from the launcher yes\n"
+    launcher.request({"cmd": "stop"})
 
 
 def test_prepares_an_app_with_dependencies_when_they_change(launcher):
@@ -239,11 +243,17 @@ def test_refuses_what_is_not_an_app(launcher):
     assert launcher.request({"cmd": "start", "app": str(launcher.root / "empty")})["error"]["code"] == "not_found"
 
 
+def test_refuses_a_public_port_without_an_internal_one(launcher):
+    refused = launcher.request({"cmd": "start", "app": str(launcher.app("unmappable")), "ports": [7000, 60000]})
+    assert refused["error"] == {"code": "bad_request", "message": "no internal port for the public ports [60000]"}
+    assert launcher.request({"cmd": "status"})["children"] == []
+
+
 def test_the_client_prints_the_response(launcher, capsys):
     app = launcher.app("client")
-    assert client.main(["--socket", launcher.socket, "start", str(app), "--env", "GREETING=a=b"]) == 0
+    assert client.main(["--socket", launcher.socket, "start", str(app), "--env", "GREETING=a=b", "--port", "7000"]) == 0
     pid = json.loads(capsys.readouterr().out)["pid"]
-    assert log_of(app).endswith(" a=b yes\n")
+    assert log_of(app).endswith(" ARDUINO_APP_PORT_7000=17000 a=b yes\n")
     assert client.main(["--socket", launcher.socket, "status"]) == 0
     assert [child["pid"] for child in json.loads(capsys.readouterr().out)["children"]] == [pid]
     assert client.main(["--socket", launcher.socket, "start", str(launcher.root / "missing")]) == 1
@@ -258,20 +268,6 @@ def test_exits_on_sigterm_stopping_its_apps(launcher):
     assert launcher.close() == 0
     assert gone(started["pid"])
     assert not os.path.exists(launcher.socket)
-
-
-def test_without_ports_there_is_no_ingress_and_no_port_variable():
-    root = short_folder()
-    launcher = Launcher(root, ports=[])
-    try:
-        app = launcher.app("portless")
-        started = launcher.request({"cmd": "start", "app": str(app)})
-        assert started["ports"] == {}
-        assert log_of(app) == f"hello from __main__ {app}/python/main.py from the launcher yes\n"
-        assert "ports []" in (root / "launcher.log").read_text()
-    finally:
-        launcher.close()
-        shutil.rmtree(root)
 
 
 def test_exits_on_sigterm_during_the_preload():

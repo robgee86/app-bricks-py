@@ -83,7 +83,7 @@ def test_environment_is_the_launch_one_plus_the_ports(tmp_path):
     assert env == {"HOME": "/home/app", "ARDUINO_APP_PORT_7000": "17000", "ARDUINO_APP_PORT_8080": "18080", "PYTHONUNBUFFERED": "1"}
 
 
-def test_environment_without_forwarded_ports_names_no_port(tmp_path):
+def test_environment_without_ports_names_no_port(tmp_path):
     env = environment(Launch(app=str(tmp_path), env={}, ports={}, output_fd=-1))
     assert env == {"PYTHONUNBUFFERED": "1"}
 

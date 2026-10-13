@@ -12,6 +12,7 @@ from typing import Any
 
 DEFAULT_SOCKET = "/run/arduino-app-cli/app-launcher.sock"
 MAX_LINE_BYTES = 1024 * 1024
+MAX_PORT = 65535
 
 
 class ErrorCode(StrEnum):
@@ -42,6 +43,8 @@ class Start:
     app: str
     env: dict[str, str] = field(default_factory=dict[str, str])
     mode: Mode = Mode.REPLACE
+    ports: tuple[int, ...] = ()
+    """The public ports of the app."""
 
 
 @dataclass(frozen=True)
@@ -89,7 +92,12 @@ def decode_request(line: bytes) -> Request:
         raise LauncherError(ErrorCode.BAD_REQUEST, f"invalid JSON: {e}") from None
     match message:
         case {"cmd": "start"}:
-            return Start(app=_app(message.get("app")), env=_env(message.get("env", {})), mode=_mode(message.get("mode", Mode.REPLACE)))
+            return Start(
+                app=_app(message.get("app")),
+                env=_env(message.get("env", {})),
+                mode=_mode(message.get("mode", Mode.REPLACE)),
+                ports=_ports(message.get("ports", [])),
+            )
         case {"cmd": "stop"}:
             app = message.get("app")
             return Stop(app=None if app is None else _app(app))
@@ -124,6 +132,25 @@ def _env(value: object) -> dict[str, str]:
             return env
         case _:
             raise LauncherError(ErrorCode.BAD_REQUEST, "env must be an object of strings")
+
+
+def _ports(value: object) -> tuple[int, ...]:
+    match value:
+        # A Go nil slice is null
+        case None:
+            return ()
+        case list():
+            ports: list[int] = []
+            for item in value:
+                match item:
+                    # bool is an int, never a port
+                    case int() if not isinstance(item, bool) and 0 < item <= MAX_PORT:
+                        ports.append(item)
+                    case _:
+                        raise LauncherError(ErrorCode.BAD_REQUEST, f"ports must be TCP port numbers, got {item!r}")
+            return tuple(dict.fromkeys(ports))
+        case _:
+            raise LauncherError(ErrorCode.BAD_REQUEST, "ports must be a list of port numbers")
 
 
 def _mode(value: object) -> Mode:

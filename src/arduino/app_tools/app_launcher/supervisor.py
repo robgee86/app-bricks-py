@@ -32,9 +32,8 @@ import yaml
 from arduino.version import __version__
 
 from . import child, prepare, protocol
-from .applog import AppLog
+from .applog import CHUNK_BYTES, AppLog
 from .child import Launch, Runner
-from .ingress import CHUNK_BYTES, Ingress
 from .protocol import ErrorCode, LauncherError, Mode, Ping, Request, Start, Status, Stop
 
 logger = logging.getLogger("arduino.app_tools.app_launcher")
@@ -55,7 +54,6 @@ class Config:
 
     preload: tuple[str, ...]
     socket_path: str
-    ports: tuple[int, ...]
     stop_timeout_s: float
     run_sh: str
     prepare_timeout_s: float
@@ -70,7 +68,6 @@ class Config:
         return cls(
             preload=tuple(name.strip() for name in env.get("APP_LAUNCHER_PRELOAD", DEFAULT_PRELOAD).split(",") if name.strip()),
             socket_path=env.get("APP_LAUNCHER_SOCKET", protocol.DEFAULT_SOCKET),
-            ports=tuple(int(port) for port in env.get("APP_LAUNCHER_PORTS", "").split(",") if port.strip()),
             stop_timeout_s=float(env.get("APP_LAUNCHER_STOP_TIMEOUT_S", "5")),
             run_sh=env.get("APP_LAUNCHER_RUN_SH", DEFAULT_RUN_SH),
             prepare_timeout_s=float(env.get("APP_LAUNCHER_PREPARE_TIMEOUT_S", "600")),
@@ -121,7 +118,7 @@ class _ForkRequest:
 
 
 def internal_port(public: int) -> int:
-    """Maps a public port to the one the app binds behind the ingress."""
+    """Maps a public port to the one the app binds behind the ingress the CLI manages."""
     return public + PORT_OFFSET
 
 
@@ -160,7 +157,7 @@ def preload(modules: Sequence[str]) -> list[str]:
 
 
 class Supervisor:
-    """Owns the control socket, the ingress and the table of running apps."""
+    """Owns the control socket and the table of running apps."""
 
     def __init__(self, config: Config, preload_failed: Sequence[str], dispositions: Mapping[int, SignalHandler]) -> None:
         """Prepares the supervisor.
@@ -177,7 +174,6 @@ class Supervisor:
         self._lifecycle = asyncio.Lock()
         self._children: dict[str, Child] = {}
         self._preparations: dict[int, _Preparation] = {}
-        self._ingress = Ingress(config.ports, self._upstream)
         self._control: asyncio.Server | None = None
         self._fork_request: _ForkRequest | None = None
         self._exiting = False
@@ -209,7 +205,6 @@ class Supervisor:
 
     async def _open(self) -> None:
         self._control = await asyncio.start_unix_server(self._on_control, sock=self._bind_control_socket(), limit=protocol.MAX_LINE_BYTES)
-        await self._ingress.start()
 
     def _bind_control_socket(self) -> socket.socket:
         path = self._config.socket_path
@@ -228,7 +223,6 @@ class Supervisor:
         return sock
 
     async def _close(self) -> None:
-        self._ingress.close()
         if self._control is not None:
             self._control.close()
         with suppress(FileNotFoundError):
@@ -240,7 +234,7 @@ class Supervisor:
             logger.warning(f"Threads alive after the preload, starting apps will be refused: {threads}")
         # Native threads are invisible to threading: only Linux lists them all
         native = f", {len(os.listdir('/proc/self/task'))} OS threads" if os.path.isdir("/proc/self/task") else ""
-        logger.info(f"Ready on {self._config.socket_path}, ports {list(self._config.ports)}, {len(threads)} Python threads{native}")
+        logger.info(f"Ready on {self._config.socket_path}, {len(threads)} Python threads{native}")
 
     def _request_exit(self, signame: str) -> None:
         if self._exiting:
@@ -313,6 +307,9 @@ class Supervisor:
             raise LauncherError(ErrorCode.NOT_FOUND, f"no app folder at {app}")
         if not os.path.isfile(os.path.join(app, "python", "main.py")):
             raise LauncherError(ErrorCode.NOT_FOUND, f"no python/main.py in {app}")
+        ports = {public: internal_port(public) for public in request.ports}
+        if unmapped := [public for public, internal in ports.items() if internal > protocol.MAX_PORT]:
+            raise LauncherError(ErrorCode.BAD_REQUEST, f"no internal port for the public ports {unmapped}")
 
         started = time.monotonic()
         await self._stop_children(list(self._children.values()))
@@ -331,11 +328,11 @@ class Supervisor:
         launch = Launch(
             app=app,
             env=env,
-            ports={public: internal_port(public) for public in self._config.ports},
+            ports=ports,
             output_fd=input_fd,
             runner=runner,
             interpreter=child.venv_interpreter(app),
-            streamlit_port=self._streamlit_port() if runner is Runner.STREAMLIT else None,
+            streamlit_port=_streamlit_port(request.ports) if runner is Runner.STREAMLIT else None,
         )
         fork = _ForkRequest(launch=launch, output_fd=output_fd, log=log, done=self._loop.create_future())
         self._fork_request = fork
@@ -487,17 +484,6 @@ class Supervisor:
             logger.info(f"{reaped.app} (pid {pid}) {how}")
             reaped.exited.set_result(status)
 
-    def _upstream(self, port: int) -> int | None:
-        return next((c.ports.get(port) for c in self._children.values() if not c.stopping), None)
-
-    def _streamlit_port(self) -> int | None:
-        # The port the streamlit_ui brick declares, else the smallest forwarded one
-        port = declared_port(STREAMLIT_UI_PACKAGE)
-        if port is None:
-            logger.warning(f"No port declared by {STREAMLIT_UI_PACKAGE}, Streamlit serves the smallest forwarded one")
-            port = min(self._config.ports, default=None)
-        return port
-
     # App output
 
     def _open_log(self, app: str) -> AppLog | None:
@@ -533,6 +519,15 @@ async def _read_request(reader: asyncio.StreamReader) -> Request:
     except ValueError:
         raise LauncherError(ErrorCode.BAD_REQUEST, f"a request must fit in {protocol.MAX_LINE_BYTES} bytes") from None
     return protocol.decode_request(line)
+
+
+def _streamlit_port(ports: Sequence[int]) -> int | None:
+    # The port the streamlit_ui brick declares, else the smallest one of the app
+    port = declared_port(STREAMLIT_UI_PACKAGE)
+    if port is None:
+        logger.warning(f"No port declared by {STREAMLIT_UI_PACKAGE}, Streamlit serves the smallest one of the app")
+        port = min(ports, default=None)
+    return port
 
 
 def _describe_ports(ports: Mapping[int, int]) -> dict[str, int]:
