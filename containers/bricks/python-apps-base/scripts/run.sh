@@ -228,15 +228,15 @@ case "$1" in
       echo "======== App preparation failed ====================="
       exit 1
     fi
-    # Validate the app sources: turns a syntax error into a prepare failure
+    # Validate the app sources, skipping the ._ resource files a macOS archive may carry: turns a syntax error into a prepare failure
     # instead of a crash on the first start. The cache prefix sends the
     # bytecode to a throwaway directory, leaving the app folder untouched.
     PYCHECK_DIR="$(mktemp -d)"
     PYCHECK_STATUS=0
     if [ -d "$BASE_DIR/bricks" ]; then
-      PYTHONPYCACHEPREFIX="$PYCHECK_DIR" python -m compileall -q "$BASE_DIR/python" "$BASE_DIR/bricks" || PYCHECK_STATUS=$?
+      PYTHONPYCACHEPREFIX="$PYCHECK_DIR" python -m compileall -q -x '/\._' "$BASE_DIR/python" "$BASE_DIR/bricks" || PYCHECK_STATUS=$?
     else
-      PYTHONPYCACHEPREFIX="$PYCHECK_DIR" python -m compileall -q "$BASE_DIR/python" || PYCHECK_STATUS=$?
+      PYTHONPYCACHEPREFIX="$PYCHECK_DIR" python -m compileall -q -x '/\._' "$BASE_DIR/python" || PYCHECK_STATUS=$?
     fi
     # The launcher prepares many apps in one container: no leftovers in /tmp
     rm -rf "$PYCHECK_DIR"
