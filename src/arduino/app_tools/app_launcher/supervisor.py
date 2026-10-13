@@ -312,6 +312,7 @@ class Supervisor:
             app=app,
             env=env,
             http_port=http_port,
+            public_port=self._config.ports[0],
             output_fd=input_fd,
             runner=child.runner(app),
             interpreter=child.venv_interpreter(app),

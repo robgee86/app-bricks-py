@@ -191,7 +191,7 @@ def test_runs_streamlit_apps_through_streamlit(launcher):
     app = launcher.app("dashboard", app_yaml="bricks:\n  - arduino:streamlit_ui: {}\n")
     started = launcher.request({"cmd": "start", "app": str(app)})
     assert (started["warm"], started["runner"], started["prepared"]) == (False, "streamlit", True)
-    streamlit = f"streamlit run --server.port {launcher.port + 10000} {app}/python/main.py {app}\n"
+    streamlit = f"streamlit run --server.port {launcher.port + 10000} --browser.serverPort {launcher.port} {app}/python/main.py {app}\n"
     assert log_of(app, until=streamlit).endswith(streamlit)
     assert launcher.request({"cmd": "stop"})["stopped"][0]["signal"] == signal.SIGTERM
 

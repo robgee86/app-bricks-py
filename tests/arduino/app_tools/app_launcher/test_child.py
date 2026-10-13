@@ -62,7 +62,17 @@ def test_streamlit_apps_are_exec_d_through_streamlit(tmp_path):
     (tmp_path / "app.yaml").write_text("bricks:\n  - arduino:streamlit_ui: {}\n")
     assert runner(str(tmp_path)) is Runner.STREAMLIT
     main_py = str(tmp_path / "python" / "main.py")
-    assert launch(tmp_path, {}, runner=Runner.STREAMLIT).exec_argv == [sys.executable, "-m", "streamlit", "run", "--server.port", "17000", main_py]
+    assert launch(tmp_path, {}, runner=Runner.STREAMLIT).exec_argv == [
+        sys.executable,
+        "-m",
+        "streamlit",
+        "run",
+        "--server.port",
+        "17000",
+        "--browser.serverPort",
+        "7000",
+        main_py,
+    ]
     assert launch(tmp_path, {}, runner=Runner.STREAMLIT, interpreter="/venv/bin/python").exec_argv[0] == "/venv/bin/python"
     assert launch(tmp_path, {}, interpreter="/venv/bin/python").exec_argv == ["/venv/bin/python", main_py]
     assert launch(tmp_path, {}).exec_argv is None
