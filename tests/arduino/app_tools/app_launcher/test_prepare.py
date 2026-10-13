@@ -128,9 +128,10 @@ def test_a_failure_reports_the_last_lines(tmp_path):
 
 def test_a_slow_preparation_is_killed(tmp_path):
     script = run_sh(tmp_path, "echo installing\nsleep 30")
+    # Generous timeout: under a loaded test run the echo must still be read before it fires
     with pytest.raises(LauncherError) as failed:
-        asyncio.run(run(tmp_path, script, timeout_s=0.3))
-    assert failed.value.message == f"{script} prepare timed out after 0.3 s:\ninstalling"
+        asyncio.run(run(tmp_path, script, timeout_s=1.5))
+    assert failed.value.message == f"{script} prepare timed out after 1.5 s:\ninstalling"
 
 
 def test_a_missing_run_sh_fails_the_preparation(tmp_path):
