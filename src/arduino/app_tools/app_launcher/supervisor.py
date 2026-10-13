@@ -28,7 +28,7 @@ from typing import Any, NoReturn
 
 from arduino.version import __version__
 
-from . import child, protocol
+from . import child, prepare, protocol
 from .applog import AppLog
 from .child import Launch, Runner
 from .ingress import CHUNK_BYTES, Ingress
@@ -38,6 +38,7 @@ logger = logging.getLogger("arduino.app_tools.app_launcher")
 
 DEFAULT_PRELOAD = "arduino.app_utils,arduino.app_peripherals.camera,arduino.app_peripherals.microphone,arduino.app_bricks.web_ui"
 DEFAULT_LINK = "/home/app/.launcher/current"
+DEFAULT_RUN_SH = "/run.sh"
 PORT_OFFSET = 10000
 REQUEST_TIMEOUT_S = 5.0
 HANDLED_SIGNALS = (signal.SIGTERM, signal.SIGINT, signal.SIGCHLD)
@@ -54,6 +55,8 @@ class Config:
     link_path: str
     ports: tuple[int, ...]
     stop_timeout_s: float
+    run_sh: str
+    prepare_timeout_s: float
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> "Config":
@@ -71,6 +74,8 @@ class Config:
             link_path=env.get("APP_LAUNCHER_LINK", DEFAULT_LINK),
             ports=ports,
             stop_timeout_s=float(env.get("APP_LAUNCHER_STOP_TIMEOUT_S", "5")),
+            run_sh=env.get("APP_LAUNCHER_RUN_SH", DEFAULT_RUN_SH),
+            prepare_timeout_s=float(env.get("APP_LAUNCHER_PREPARE_TIMEOUT_S", "600")),
         )
 
 
@@ -98,6 +103,14 @@ class Child:
             "runner": str(self.runner),
             "warm": self.warm,
         }
+
+
+@dataclass(frozen=True)
+class _Preparation:
+    """A running `run.sh prepare`."""
+
+    app: str
+    exited: asyncio.Future[int]
 
 
 @dataclass(frozen=True)
@@ -140,6 +153,7 @@ class Supervisor:
         self._loop = asyncio.new_event_loop()
         self._lifecycle = asyncio.Lock()
         self._children: dict[str, Child] = {}
+        self._preparations: dict[int, _Preparation] = {}
         self._ingress = Ingress(config.ports, self._upstream)
         self._control: asyncio.Server | None = None
         self._fork_request: _ForkRequest | None = None
@@ -212,6 +226,7 @@ class Supervisor:
             return
         logger.info(f"{signame} received, stopping")
         self._exiting = True
+        self._stop_preparations(None)
         self._exit_task = self._loop.create_task(self._exit())
 
     async def _exit(self) -> None:
@@ -248,6 +263,8 @@ class Supervisor:
                     self._refuse_while_exiting()
                     return await self._start(request)
             case Stop():
+                # A preparation may hold the lifecycle for minutes
+                self._stop_preparations(request.app)
                 async with self._lifecycle:
                     self._refuse_while_exiting()
                     targets = [c for c in self._children.values() if request.app in (None, c.app)]
@@ -280,15 +297,20 @@ class Supervisor:
         await self._stop_children(list(self._children.values()))
         stop_ms = _ms_since(started)
 
+        env = {**os.environ, **request.env}
+        log = self._open_log(app)
+        started = time.monotonic()
+        prepared = await self._prepare(app, env, log)
+        prepare_ms = _ms_since(started)
+
         started = time.monotonic()
         self._point_link(app)
-        log = self._open_log(app)
         output_fd, input_fd = os.pipe()
         os.set_blocking(output_fd, False)
         http_port = self._config.ports[0] + PORT_OFFSET
         launch = Launch(
             app=app,
-            env={**os.environ, **request.env},
+            env=env,
             http_port=http_port,
             output_fd=input_fd,
             runner=child.runner(app),
@@ -303,8 +325,45 @@ class Supervisor:
             started_at=started_child.started_at.isoformat(),
             warm=started_child.warm,
             runner=str(started_child.runner),
-            timings={"stop_ms": stop_ms, "fork_ms": _ms_since(started)},
+            prepared=prepared,
+            timings={"stop_ms": stop_ms, "prepare_ms": prepare_ms, "fork_ms": _ms_since(started)},
         )
+
+    async def _prepare(self, app: str, env: Mapping[str, str], log: AppLog | None) -> bool:
+        """Runs `run.sh prepare` when the app dependencies changed since the last success; returns whether it ran."""
+        current = prepare.fingerprint(app)
+        if current is None or not prepare.needs_preparation(app, current):
+            return False
+        try:
+            # Checked in the loop step that spawns run.sh, so a shutdown never misses a preparation
+            self._refuse_while_exiting()
+            logger.info(f"Preparing {app}")
+            await prepare.run(app, env, self._config.run_sh, self._config.prepare_timeout_s, log, lambda pid: self._watch_preparation(app, pid))
+        except BaseException as e:
+            if isinstance(e, LauncherError) and e.code is ErrorCode.PREPARE_FAILED:
+                logger.warning(f"Preparation of {app} failed: {e.message.splitlines()[0]}")
+            if log is not None:
+                log.close()
+            raise
+        try:
+            prepare.record(app, current)
+        except OSError as e:
+            logger.warning(f"Cannot record the preparation of {app}, the next start prepares it again: {e}")
+        logger.info(f"Prepared {app}")
+        return True
+
+    def _watch_preparation(self, app: str, pid: int) -> asyncio.Future[int]:
+        # Registered before the loop runs again, so the reaper always finds it
+        preparation = _Preparation(app=app, exited=self._loop.create_future())
+        self._preparations[pid] = preparation
+        return preparation.exited
+
+    def _stop_preparations(self, app: str | None) -> None:
+        for pid, preparation in self._preparations.items():
+            if app in (None, preparation.app):
+                logger.info(f"Stopping the preparation of {preparation.app}")
+                with suppress(ProcessLookupError, PermissionError):
+                    os.killpg(pid, signal.SIGTERM)
 
     def _fork(self, request: _ForkRequest) -> int:
         """Forks the app process; returns 0 in the child and the pid in the parent, or -1 when the fork failed."""
@@ -390,6 +449,10 @@ class Supervisor:
                 return
             if pid == 0:
                 return
+            if (preparation := self._preparations.pop(pid, None)) is not None:
+                if not preparation.exited.done():
+                    preparation.exited.set_result(status)
+                continue
             reaped = next((c for c in self._children.values() if c.pid == pid), None)
             if reaped is None:
                 continue

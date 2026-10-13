@@ -91,6 +91,9 @@ if [ "$1" = "serve" ]; then
   exec arduino-app-launcher
 fi
 
+# Installs and the app run from the app folder, whatever the image WORKDIR
+cd "$BASE_DIR"
+
 mkdir -p "$CACHE_DIR"
 if needs_venv; then
   if [ ! -d "$CACHE_DIR/.venv" ]; then
@@ -193,7 +196,10 @@ if [ "$DEPS_INSTALLED" -ne 0 ]; then
   uv cache clean
 fi
 
-provision_devices
+# Only the app needs the devices: in the serve mode the launcher provisioned them already
+if [ "$1" != "prepare" ]; then
+  provision_devices
+fi
 
 # Load custom bricks if present
 if [ -d "$BASE_DIR/bricks" ]; then
@@ -226,15 +232,17 @@ case "$1" in
     # instead of a crash on the first start. The cache prefix sends the
     # bytecode to a throwaway directory, leaving the app folder untouched.
     PYCHECK_DIR="$(mktemp -d)"
+    PYCHECK_STATUS=0
     if [ -d "$BASE_DIR/bricks" ]; then
-      PYTHONPYCACHEPREFIX="$PYCHECK_DIR" python -m compileall -q "$BASE_DIR/python" "$BASE_DIR/bricks"
+      PYTHONPYCACHEPREFIX="$PYCHECK_DIR" python -m compileall -q "$BASE_DIR/python" "$BASE_DIR/bricks" || PYCHECK_STATUS=$?
     else
-      PYTHONPYCACHEPREFIX="$PYCHECK_DIR" python -m compileall -q "$BASE_DIR/python"
+      PYTHONPYCACHEPREFIX="$PYCHECK_DIR" python -m compileall -q "$BASE_DIR/python" || PYCHECK_STATUS=$?
     fi
+    # The launcher prepares many apps in one container: no leftovers in /tmp
+    rm -rf "$PYCHECK_DIR"
+    exit "$PYCHECK_STATUS"
     ;;
   *)
-    # The app runs from its folder, whatever the image WORKDIR
-    cd "$BASE_DIR"
     install_streamlit
     if check_streamlit_ui; then
       exec streamlit run --server.port "${ARDUINO_APP_HTTP_PORT:-7000}" "$PYTHON_SCRIPT"

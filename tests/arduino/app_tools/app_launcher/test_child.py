@@ -41,6 +41,8 @@ def test_an_app_without_dependencies_of_its_own_runs_warm(venv):
         lambda app, site: (site / "editable.pth").touch(),
         lambda app, site: (app / "python" / "requirements.txt").write_text("requests\n"),
         lambda app, site: (app / "python-libraries").mkdir() or (app / "python-libraries" / "lib-1.0-py3-none-any.whl.installed").touch(),
+        lambda app, site: (app / "bricks" / "mine").mkdir(parents=True) or (app / "bricks" / "mine" / "requirements.txt").write_text("numpy\n"),
+        lambda app, site: (app / "app.yaml").write_text("bricks:\n  - arduino:streamlit_ui: {}\n"),
     ],
 )
 def test_an_app_with_dependencies_of_its_own_runs_its_venv(venv, dependency):
