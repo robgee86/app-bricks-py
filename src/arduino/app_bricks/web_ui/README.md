@@ -40,7 +40,7 @@ web_ui.on_connect(lambda sid: web_ui.send_message("hello", {"message": f"Hello, 
 # Start the app: this runs the server and blocks until the app is stopped
 App.run()
 
-# The server now serves the static files from /app/assets and responds to /hello requests
+# The server now serves the static files from the assets folder of the app and responds to /hello requests
 ```
 
 The server is started by `App.run()` — you don't need to call any method on `web_ui` to start it. API routes are registered under `api_path_prefix`, which defaults to `""` (so the endpoint above is `/hello`).
@@ -57,12 +57,12 @@ WebSocket messages can only be delivered while the server is running: call `send
 | `port` | `7000` | Server port shown in the URLs (`0` picks a free port) |
 | `ui_path_prefix` | `""` | URL prefix for UI routes |
 | `api_path_prefix` | `""` | URL prefix for API routes |
-| `assets_dir_path` | `"/app/assets"` | Static assets directory; must contain an `index.html` if present, otherwise `start()` raises `RuntimeError` |
-| `certs_dir_path` | `"/app/certs"` | TLS certificates directory |
+| `assets_dir_path` | `assets` in the app folder, usually `"/app/assets"` | Static assets directory; must contain an `index.html` if present, otherwise `start()` raises `RuntimeError` |
+| `certs_dir_path` | `certs` in the app folder, usually `"/app/certs"` | TLS certificates directory |
 | `use_tls` | `False` | Enable TLS/HTTPS |
 | `cors_origins` | `"*"` | CORS allowed origins (`"*"`, comma-separated list, or `""` to disable) |
 
-When `port` is the default `7000`, the `ARDUINO_APP_HTTP_PORT` environment variable, when set to a port between 1 and 65535, overrides the port the server binds to, while `url`, `local_url` and the logged URLs keep showing `7000`. This lets a proxy in front of the app serve the public port and forward to the internal one. Invalid values are logged and ignored, and any other `port` ignores the variable.
+The `ARDUINO_APP_PORT_<port>` environment variable, named after the configured `port` (e.g. `ARDUINO_APP_PORT_7000`), when set to a port between 1 and 65535, overrides the port the server binds to, while `url`, `local_url` and the logged URLs keep showing `port`. This lets a proxy in front of the app serve the public port and forward to the internal one, as the app launcher does. Invalid values are logged and ignored.
 
 ## Main methods
 

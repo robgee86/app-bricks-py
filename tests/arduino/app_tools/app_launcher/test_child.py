@@ -11,7 +11,7 @@ from arduino.app_tools.app_launcher.child import Launch, Runner, environment, ru
 
 
 def launch(app, env, **fields):
-    return Launch(app=str(app), env=env, http_port=17000, output_fd=-1, **fields)
+    return Launch(app=str(app), env=env, ports={8000: 18000}, output_fd=-1, **fields)
 
 
 @pytest.fixture
@@ -62,24 +62,30 @@ def test_streamlit_apps_are_exec_d_through_streamlit(tmp_path):
     (tmp_path / "app.yaml").write_text("bricks:\n  - arduino:streamlit_ui: {}\n")
     assert runner(str(tmp_path)) is Runner.STREAMLIT
     main_py = str(tmp_path / "python" / "main.py")
-    assert launch(tmp_path, {}, runner=Runner.STREAMLIT).exec_argv == [
-        sys.executable,
-        "-m",
-        "streamlit",
-        "run",
+    streamlit = [sys.executable, "-m", "streamlit", "run"]
+    assert launch(tmp_path, {}, runner=Runner.STREAMLIT, streamlit_port=8000).exec_argv == [
+        *streamlit,
         "--server.port",
-        "17000",
+        "18000",
         "--browser.serverPort",
-        "7000",
+        "8000",
         main_py,
     ]
+    assert launch(tmp_path, {}, runner=Runner.STREAMLIT, streamlit_port=9000).exec_argv == [*streamlit, "--server.port", "9000", main_py]
+    assert launch(tmp_path, {}, runner=Runner.STREAMLIT).exec_argv == [*streamlit, main_py]
     assert launch(tmp_path, {}, runner=Runner.STREAMLIT, interpreter="/venv/bin/python").exec_argv[0] == "/venv/bin/python"
     assert launch(tmp_path, {}, interpreter="/venv/bin/python").exec_argv == ["/venv/bin/python", main_py]
     assert launch(tmp_path, {}).exec_argv is None
 
 
-def test_environment_is_the_launch_one_plus_the_port(tmp_path):
-    assert environment(launch(tmp_path, {"HOME": "/home/app"})) == {"HOME": "/home/app", "ARDUINO_APP_HTTP_PORT": "17000", "PYTHONUNBUFFERED": "1"}
+def test_environment_is_the_launch_one_plus_the_ports(tmp_path):
+    env = environment(Launch(app=str(tmp_path), env={"HOME": "/home/app"}, ports={7000: 17000, 8080: 18080}, output_fd=-1))
+    assert env == {"HOME": "/home/app", "ARDUINO_APP_PORT_7000": "17000", "ARDUINO_APP_PORT_8080": "18080", "PYTHONUNBUFFERED": "1"}
+
+
+def test_environment_without_forwarded_ports_names_no_port(tmp_path):
+    env = environment(Launch(app=str(tmp_path), env={}, ports={}, output_fd=-1))
+    assert env == {"PYTHONUNBUFFERED": "1"}
 
 
 def test_environment_adds_the_app_bricks_to_pythonpath(tmp_path):

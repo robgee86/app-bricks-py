@@ -11,6 +11,7 @@ between two runs of the loop, never inside a callback, so the child never unwind
 import asyncio
 import gc
 import importlib
+import importlib.util
 import logging
 import os
 import signal
@@ -26,6 +27,8 @@ from datetime import UTC, datetime
 from types import FrameType
 from typing import Any, NoReturn
 
+import yaml
+
 from arduino.version import __version__
 
 from . import child, prepare, protocol
@@ -40,6 +43,7 @@ DEFAULT_PRELOAD = "arduino.app_utils,arduino.app_peripherals.camera,arduino.app_
 DEFAULT_LINK = "/home/app/.launcher/current"
 DEFAULT_RUN_SH = "/run.sh"
 PORT_OFFSET = 10000
+STREAMLIT_UI_PACKAGE = "arduino.app_bricks.streamlit_ui"
 REQUEST_TIMEOUT_S = 5.0
 HANDLED_SIGNALS = (signal.SIGTERM, signal.SIGINT, signal.SIGCHLD)
 
@@ -65,14 +69,11 @@ class Config:
         Raises:
             ValueError: when a value is malformed.
         """
-        ports = tuple(int(port) for port in env.get("APP_LAUNCHER_PORTS", "7000").split(",") if port.strip())
-        if not ports:
-            raise ValueError("APP_LAUNCHER_PORTS must list at least one port")
         return cls(
             preload=tuple(name.strip() for name in env.get("APP_LAUNCHER_PRELOAD", DEFAULT_PRELOAD).split(",") if name.strip()),
             socket_path=env.get("APP_LAUNCHER_SOCKET", protocol.DEFAULT_SOCKET),
             link_path=env.get("APP_LAUNCHER_LINK", DEFAULT_LINK),
-            ports=ports,
+            ports=tuple(int(port) for port in env.get("APP_LAUNCHER_PORTS", "").split(",") if port.strip()),
             stop_timeout_s=float(env.get("APP_LAUNCHER_STOP_TIMEOUT_S", "5")),
             run_sh=env.get("APP_LAUNCHER_RUN_SH", DEFAULT_RUN_SH),
             prepare_timeout_s=float(env.get("APP_LAUNCHER_PREPARE_TIMEOUT_S", "600")),
@@ -85,7 +86,8 @@ class Child:
 
     app: str
     pid: int
-    http_port: int
+    ports: Mapping[int, int]
+    """The internal port of each public one."""
     runner: Runner
     warm: bool
     started_at: datetime
@@ -99,7 +101,7 @@ class Child:
             "pid": self.pid,
             "state": "stopping" if self.stopping else "running",
             "started_at": self.started_at.isoformat(),
-            "http_port": self.http_port,
+            "ports": _describe_ports(self.ports),
             "runner": str(self.runner),
             "warm": self.warm,
         }
@@ -119,6 +121,30 @@ class _ForkRequest:
     output_fd: int
     log: AppLog | None
     done: asyncio.Future[Child] = field(repr=False)
+
+
+def internal_port(public: int) -> int:
+    """Maps a public port to the one the app binds behind the ingress."""
+    return public + PORT_OFFSET
+
+
+def declared_port(package: str) -> int | None:
+    """Returns the first port a brick declares in its brick_config.yaml, None when it declares none or the file is unreadable."""
+    # find_spec imports the parent packages only, never the brick itself
+    spec = importlib.util.find_spec(package)
+    folders = list(spec.submodule_search_locations or []) if spec is not None else []
+    for folder in folders:
+        try:
+            with open(os.path.join(folder, "brick_config.yaml"), encoding="utf-8") as f:
+                config: Any = yaml.safe_load(f)
+        except (OSError, yaml.YAMLError):
+            continue
+        match config:
+            case {"ports": [int() as port, *_]}:
+                return port
+            case _:
+                return None
+    return None
 
 
 def preload(modules: Sequence[str]) -> list[str]:
@@ -307,15 +333,15 @@ class Supervisor:
         self._point_link(app)
         output_fd, input_fd = os.pipe()
         os.set_blocking(output_fd, False)
-        http_port = self._config.ports[0] + PORT_OFFSET
+        runner = child.runner(app)
         launch = Launch(
             app=app,
             env=env,
-            http_port=http_port,
-            public_port=self._config.ports[0],
+            ports={public: internal_port(public) for public in self._config.ports},
             output_fd=input_fd,
-            runner=child.runner(app),
+            runner=runner,
             interpreter=child.venv_interpreter(app),
+            streamlit_port=self._streamlit_port() if runner is Runner.STREAMLIT else None,
         )
         fork = _ForkRequest(launch=launch, output_fd=output_fd, log=log, done=self._loop.create_future())
         self._fork_request = fork
@@ -326,6 +352,7 @@ class Supervisor:
             started_at=started_child.started_at.isoformat(),
             warm=started_child.warm,
             runner=str(started_child.runner),
+            ports=_describe_ports(started_child.ports),
             prepared=prepared,
             timings={"stop_ms": stop_ms, "prepare_ms": prepare_ms, "fork_ms": _ms_since(started)},
         )
@@ -399,7 +426,7 @@ class Supervisor:
         launched = Child(
             app=request.launch.app,
             pid=pid,
-            http_port=request.launch.http_port,
+            ports=request.launch.ports,
             runner=request.launch.runner,
             warm=request.launch.exec_argv is None,
             started_at=datetime.now(UTC),
@@ -467,14 +494,20 @@ class Supervisor:
             reaped.exited.set_result(status)
 
     def _upstream(self, port: int) -> int | None:
-        if any(not c.stopping for c in self._children.values()):
-            return port + PORT_OFFSET
-        return None
+        return next((c.ports.get(port) for c in self._children.values() if not c.stopping), None)
+
+    def _streamlit_port(self) -> int | None:
+        # The port the streamlit_ui brick declares, else the smallest forwarded one
+        port = declared_port(STREAMLIT_UI_PACKAGE)
+        if port is None:
+            logger.warning(f"No port declared by {STREAMLIT_UI_PACKAGE}, Streamlit serves the smallest forwarded one")
+            port = min(self._config.ports, default=None)
+        return port
 
     # App folder
 
     def _point_link(self, app: str) -> None:
-        # The library hardcodes /app, a link to this one: concurrent apps need the library to use APP_HOME instead
+        # For the apps that hardcode /app, a link to this one: the library itself follows APP_HOME
         link = self._config.link_path
         if not os.path.isdir(os.path.dirname(link)):
             return
@@ -519,6 +552,11 @@ async def _read_request(reader: asyncio.StreamReader) -> Request:
     except ValueError:
         raise LauncherError(ErrorCode.BAD_REQUEST, f"a request must fit in {protocol.MAX_LINE_BYTES} bytes") from None
     return protocol.decode_request(line)
+
+
+def _describe_ports(ports: Mapping[int, int]) -> dict[str, int]:
+    # JSON object keys are strings
+    return {str(public): internal for public, internal in ports.items()}
 
 
 def _exit_fields(status: int) -> dict[str, int | None]:

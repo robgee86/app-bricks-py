@@ -245,7 +245,7 @@ case "$1" in
   *)
     install_streamlit
     if check_streamlit_ui; then
-      exec streamlit run --server.port "${ARDUINO_APP_HTTP_PORT:-7000}" "$PYTHON_SCRIPT"
+      exec streamlit run --server.port "${ARDUINO_APP_PORT_7000:-7000}" "$PYTHON_SCRIPT"
     fi
 
     echo "======== App is starting ============================"
