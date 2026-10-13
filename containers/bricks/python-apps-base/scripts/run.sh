@@ -6,8 +6,8 @@
 
 OPENCV_DEBUG=0
 
-# Until the app is exec'd this shell is PID 1, which ignores signals without a
-# handler: a stop during the provisioning would wait for the kill timeout.
+# A shell ignores signals without a handler when it is PID 1: a stop during the
+# device provisioning or a preparation would wait for the kill timeout.
 trap 'exit 143' TERM INT
 
 # Disable core dumps: inherited by python and any native library it loads.
@@ -39,22 +39,30 @@ provision_devices() {
   sh /provision-fastrpc-dsp.sh || echo "Warning: fastrpc DSP provisioning failed"
 }
 
-# The launcher runs each app from its own folder, never /app: devices provisioned once
-if [ "$1" = "serve" ]; then
-  provision_devices
-  exec arduino-app-launcher
-fi
+# serve, the default, runs the launcher; prepare is how the launcher installs
+# the dependencies of the app at APP_DIR
+case "${1:-serve}" in
+  serve)
+    # Once for every app the launcher runs
+    provision_devices
+    exec arduino-app-launcher
+    ;;
+  prepare)
+    ;;
+  *)
+    echo "Unknown mode '$1': use serve or prepare" >&2
+    exit 2
+    ;;
+esac
 
-BASE_DIR="${APP_DIR:-/app}"
+BASE_DIR="${APP_DIR:?prepare needs APP_DIR, the app folder}"
 CACHE_DIR="$BASE_DIR/.cache"
 APP_YAML="$BASE_DIR/app.yaml"
-PYTHON_SCRIPT="$BASE_DIR/python/main.py"
 REQUIREMENTS_FILE="$BASE_DIR/python/requirements.txt"
 PYTHON_LIBS_DIR="$BASE_DIR/python-libraries"
 INSTALLED_REQUIREMENTS_FILE="$CACHE_DIR/installed_requirements.txt"
 
-# Set when a dependency install fails: only `prepare` acts on it, starting the
-# app stays best-effort as before.
+# Set when a dependency install fails: the preparation fails once all were tried.
 DEPS_FAILED=0
 # Set when something was installed: the uv cache is worth cleaning only then.
 DEPS_INSTALLED=0
@@ -68,6 +76,9 @@ if [ "${ENABLE_CORE_DUMPS:-0}" != "1" ]; then
     \( -name 'core' -o -name 'core.[0-9]*' -o -name '*.core' \) \
     -print -delete 2>/dev/null || true
 fi
+
+# Installs run from the app folder, whatever the image WORKDIR
+cd "$BASE_DIR"
 
 check_streamlit_ui() {
   grep -q "arduino:streamlit_ui" "$APP_YAML"
@@ -90,9 +101,6 @@ needs_venv() {
   done
   check_streamlit_ui
 }
-
-# Installs and the app run from the app folder, whatever the image WORKDIR
-cd "$BASE_DIR"
 
 mkdir -p "$CACHE_DIR"
 if needs_venv; then
@@ -196,59 +204,26 @@ if [ "$DEPS_INSTALLED" -ne 0 ]; then
   uv cache clean
 fi
 
-# Only the app needs the devices: in the serve mode the launcher provisioned them already
-if [ "$1" != "prepare" ]; then
-  provision_devices
+set -e
+# The launcher runs a Streamlit app with the Streamlit of its venv
+if check_streamlit_ui && ! uv pip show streamlit > /dev/null 2>&1; then
+  echo "streamlit not found, installing..."
+  uv pip install --no-cache-dir --link-mode=copy --compile-bytecode streamlit
 fi
-
-# Load custom bricks if present
+if [ "$DEPS_FAILED" -ne 0 ]; then
+  echo "======== App preparation failed ====================="
+  exit 1
+fi
+# Validate the app sources, skipping the ._ resource files a macOS archive may carry: turns a syntax error into a prepare failure
+# instead of a crash on the first start. The cache prefix sends the
+# bytecode to a throwaway directory, leaving the app folder untouched.
+PYCHECK_DIR="$(mktemp -d)"
+PYCHECK_STATUS=0
 if [ -d "$BASE_DIR/bricks" ]; then
-    if [ -z "$PYTHONPATH" ]; then
-        export PYTHONPATH="$BASE_DIR/bricks"
-    else
-        export PYTHONPATH="$PYTHONPATH:$BASE_DIR/bricks"
-    fi
+  PYTHONPYCACHEPREFIX="$PYCHECK_DIR" python -m compileall -q -x '/\._' "$BASE_DIR/python" "$BASE_DIR/bricks" || PYCHECK_STATUS=$?
+else
+  PYTHONPYCACHEPREFIX="$PYCHECK_DIR" python -m compileall -q -x '/\._' "$BASE_DIR/python" || PYCHECK_STATUS=$?
 fi
-
-install_streamlit() {
-  if check_streamlit_ui && ! uv pip show streamlit > /dev/null 2>&1; then
-    echo "streamlit not found, installing..."
-    uv pip install --no-cache-dir --link-mode=copy --compile-bytecode streamlit
-  fi
-}
-
-case "$1" in
-  provision)
-    arduino-bricks-list-modules --provision-compose
-    ;;
-  prepare)
-    set -e
-    install_streamlit
-    if [ "$DEPS_FAILED" -ne 0 ]; then
-      echo "======== App preparation failed ====================="
-      exit 1
-    fi
-    # Validate the app sources, skipping the ._ resource files a macOS archive may carry: turns a syntax error into a prepare failure
-    # instead of a crash on the first start. The cache prefix sends the
-    # bytecode to a throwaway directory, leaving the app folder untouched.
-    PYCHECK_DIR="$(mktemp -d)"
-    PYCHECK_STATUS=0
-    if [ -d "$BASE_DIR/bricks" ]; then
-      PYTHONPYCACHEPREFIX="$PYCHECK_DIR" python -m compileall -q -x '/\._' "$BASE_DIR/python" "$BASE_DIR/bricks" || PYCHECK_STATUS=$?
-    else
-      PYTHONPYCACHEPREFIX="$PYCHECK_DIR" python -m compileall -q -x '/\._' "$BASE_DIR/python" || PYCHECK_STATUS=$?
-    fi
-    # The launcher prepares many apps in one container: no leftovers in /tmp
-    rm -rf "$PYCHECK_DIR"
-    exit "$PYCHECK_STATUS"
-    ;;
-  *)
-    install_streamlit
-    if check_streamlit_ui; then
-      exec streamlit run --server.port "${ARDUINO_APP_PORT_7000:-7000}" "$PYTHON_SCRIPT"
-    fi
-
-    echo "======== App is starting ============================"
-    exec python "$PYTHON_SCRIPT"
-    ;;
-esac
+# The launcher prepares many apps in one container: no leftovers in /tmp
+rm -rf "$PYCHECK_DIR"
+exit "$PYCHECK_STATUS"
