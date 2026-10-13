@@ -15,6 +15,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
+from . import prepare
+
 
 class Runner(StrEnum):
     PYTHON = "python"
@@ -51,32 +53,22 @@ class Launch:
 
 def runner(app: str) -> Runner:
     """Returns how the app runs: through Streamlit when its app.yaml uses the streamlit_ui brick, as run.sh decides."""
-    try:
-        with open(os.path.join(app, "app.yaml"), encoding="utf-8") as f:
-            return Runner.STREAMLIT if "arduino:streamlit_ui" in f.read() else Runner.PYTHON
-    except OSError:
-        return Runner.PYTHON
+    return Runner.STREAMLIT if prepare.uses_streamlit(app) else Runner.PYTHON
 
 
 def venv_interpreter(app: str) -> str | None:
     """Returns the interpreter of the app venv when the app has dependencies of its own, None when the image is enough."""
-    python = os.path.join(app, ".cache", ".venv", "bin", "python")
-    return python if os.path.exists(python) and _has_own_dependencies(app) else None
+    python = prepare.venv_python(app)
+    return python if os.path.exists(python) and (prepare.dependencies(app) or _venv_has_packages(app)) else None
 
 
-def _has_own_dependencies(app: str) -> bool:
+def _venv_has_packages(app: str) -> bool:
     # An empty `uv venv` holds only _virtualenv.pth and _virtualenv.py
     for path in glob.glob(os.path.join(glob.escape(app), ".cache", ".venv", "lib", "python*", "site-packages", "*")):
         name = os.path.basename(path)
         if name.endswith(".dist-info") or (name.endswith(".pth") and name != "_virtualenv.pth"):
             return True
-    if glob.glob(os.path.join(glob.escape(app), "python-libraries", "*.whl*")):
-        return True
-    try:
-        with open(os.path.join(app, "python", "requirements.txt"), encoding="utf-8") as f:
-            return any(line.strip() for line in f)
-    except OSError:
-        return False
+    return False
 
 
 def environment(launch: Launch) -> dict[str, str]:
