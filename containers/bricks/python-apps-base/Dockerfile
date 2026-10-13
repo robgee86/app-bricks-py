@@ -21,7 +21,7 @@ COPY ./patches/ /tmp/patches/
 RUN set -ex; \
     uv export --frozen --project /app --extra all --no-dev --no-emit-project --no-emit-package opencv-python-headless | uv pip install --system --no-cache-dir --require-hashes -r -; \
     uv pip install --system --no-cache-dir --no-deps /app/*.whl; \
-    rm -rf /app; \
+    rm /app/*.whl /app/pyproject.toml /app/uv.lock; \
     # Every patch in patches/ (see its README), in name order: one that no longer applies exactly fails the build.
     # Applied before compileall, which compiles the patched sources. GNU patch comes in through dpkg: apt-get
     # install refuses to run on the packages python-base removes with --force-depends, dpkg checks only the
@@ -39,9 +39,6 @@ RUN set -ex; \
     rm -rf /tmp/patches; \
     # ALSA dsnoop/dmix wrappers: the file is static, generate it once here instead of at every app start
     HOME=/home/app bash /provision-alsa-devices.sh; \    
-    # Root-owned /app leads to .launcher/current: the classic mode bind-mounts the app there, the launcher swaps in a link
-    mkdir -p /home/app/.launcher/current; \
-    ln -s /home/app/.launcher/current /app; \
     # fix permissions for /home/app
     chown arduino:arduino -R /home/app; \
     chmod 777 -R /home/app; \
@@ -55,8 +52,7 @@ RUN set -ex; \
 
 USER arduino
 
-# Not /app: in the serve mode it may lead to an app folder removed meanwhile
-WORKDIR /home/app
+WORKDIR /app
 
 ENV HOME=/home/app
 ENV USER=arduino
