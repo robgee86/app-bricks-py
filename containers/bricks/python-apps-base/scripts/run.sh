@@ -20,7 +20,7 @@ if [ -z "$PYTHONUNBUFFERED" ]; then
   export PYTHONUNBUFFERED=1
 fi
 
-BASE_DIR="/app"
+BASE_DIR="${APP_DIR:-/app}"
 CACHE_DIR="$BASE_DIR/.cache"
 APP_YAML="$BASE_DIR/app.yaml"
 PYTHON_SCRIPT="$BASE_DIR/python/main.py"
@@ -73,6 +73,24 @@ needs_venv() {
   check_streamlit_ui
 }
 
+provision_devices() {
+  # The ALSA wrapped devices config is baked into the image: generate it only when
+  # missing, e.g. with another HOME
+  [ -f "$HOME/.asoundrc" ] || bash /provision-alsa-devices.sh
+
+  # Merge the host DSP payload and yaml config into /usr/share/hexagon-dsp,
+  # where the fastrpc client libraries look for them. The script ships with the
+  # libraries in python-base. Best-effort: a failure here only means the DSP is
+  # unavailable, the app still starts.
+  sh /provision-fastrpc-dsp.sh || echo "Warning: fastrpc DSP provisioning failed"
+}
+
+# The launcher runs the apps itself: no app folder yet, devices provisioned once
+if [ "$1" = "serve" ]; then
+  provision_devices
+  exec arduino-app-launcher
+fi
+
 mkdir -p "$CACHE_DIR"
 if needs_venv; then
   if [ ! -d "$CACHE_DIR/.venv" ]; then
@@ -91,7 +109,9 @@ if needs_venv; then
     fi
   fi
 
-  . "$CACHE_DIR/.venv/bin/activate"
+  # Not bin/activate: it hardcodes the path the venv was created at, which differs with APP_DIR
+  export VIRTUAL_ENV="$CACHE_DIR/.venv"
+  export PATH="$VIRTUAL_ENV/bin:$PATH"
 fi
 
 if [ -d "$PYTHON_LIBS_DIR" ]; then
@@ -173,15 +193,7 @@ if [ "$DEPS_INSTALLED" -ne 0 ]; then
   uv cache clean
 fi
 
-# Pre-provision ALSA wrapped devices. The image bakes the file at build time;
-# generate it only when missing (e.g. HOME overridden).
-[ -f "$HOME/.asoundrc" ] || bash /provision-alsa-devices.sh
-
-# Merge the host DSP payload and yaml config into /usr/share/hexagon-dsp,
-# where the fastrpc client libraries look for them. The script ships with the
-# libraries in python-base. Best-effort: a failure here only means the DSP is
-# unavailable, the app still starts.
-sh /provision-fastrpc-dsp.sh || echo "Warning: fastrpc DSP provisioning failed"
+provision_devices
 
 # Load custom bricks if present
 if [ -d "$BASE_DIR/bricks" ]; then
@@ -221,13 +233,14 @@ case "$1" in
     fi
     ;;
   *)
+    # The app runs from its folder, whatever the image WORKDIR
+    cd "$BASE_DIR"
     install_streamlit
     if check_streamlit_ui; then
-      exec streamlit run --server.port 7000 "$PYTHON_SCRIPT"
+      exec streamlit run --server.port "${ARDUINO_APP_HTTP_PORT:-7000}" "$PYTHON_SCRIPT"
     fi
 
     echo "======== App is starting ============================"
-    cd $BASE_DIR # Change to the base directory
     exec python "$PYTHON_SCRIPT"
     ;;
 esac
