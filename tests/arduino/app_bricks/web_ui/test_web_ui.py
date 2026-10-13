@@ -9,7 +9,7 @@ import socket
 import threading
 import time
 from collections.abc import Iterator
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 import pytest
@@ -377,3 +377,64 @@ def test_stop_without_a_server_is_a_noop():
     ui.stop()  # must not raise
 
     assert ui._server is None
+
+
+@pytest.mark.parametrize("value", [None, ""])
+def test_server_binds_to_port_7000_by_default(monkeypatch, value):
+    if value is None:
+        monkeypatch.delenv("ARDUINO_APP_HTTP_PORT", raising=False)
+    else:
+        monkeypatch.setenv("ARDUINO_APP_HTTP_PORT", value)
+    ui = WebUI()
+    ui.start()
+
+    assert ui._server is not None
+    assert ui._server.config.port == 7000
+
+
+def test_server_binds_to_the_port_from_the_environment(monkeypatch):
+    monkeypatch.setenv("ARDUINO_APP_HTTP_PORT", "7001")
+    ui = WebUI()
+    ui.start()
+
+    assert ui._server is not None
+    assert ui._server.config.port == 7001
+    assert ui.local_url == "http://localhost:7000"
+
+
+def test_explicit_port_ignores_the_port_from_the_environment(monkeypatch):
+    monkeypatch.setenv("ARDUINO_APP_HTTP_PORT", "7001")
+    ui = WebUI(port=8080)
+    ui.start()
+
+    assert ui._server is not None
+    assert ui._server.config.port == 8080
+    assert ui.local_url == "http://localhost:8080"
+
+
+@pytest.mark.parametrize("value", ["abc", "0", "65536", "-1"])
+def test_invalid_port_from_the_environment_is_ignored(monkeypatch, value):
+    monkeypatch.setenv("ARDUINO_APP_HTTP_PORT", value)
+    with patch.object(web_ui.logger, "warning") as warning:
+        ui = WebUI()
+    ui.start()
+
+    assert ui._server is not None
+    assert ui._server.config.port == 7000
+    warning.assert_called_once()
+    assert "ARDUINO_APP_HTTP_PORT" in warning.call_args.args[0]
+
+
+def test_logged_urls_show_the_public_port(monkeypatch):
+    monkeypatch.setenv("ARDUINO_APP_HTTP_PORT", "7001")
+    monkeypatch.setenv("HOST_IP", "192.168.1.10")
+    ui = WebUI()
+    ui._server = Mock()
+
+    with patch.object(web_ui.logger, "info") as info:
+        ui.execute()
+
+    logged = info.call_args.args[0]
+    assert "http://localhost:7000" in logged
+    assert "http://192.168.1.10:7000" in logged
+    assert "7001" not in logged
