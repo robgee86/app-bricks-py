@@ -34,6 +34,27 @@ never completes on its own. The app's shutdown is time-boxed, so the wait has to
 FORCE_SHUTDOWN_TIMEOUT_S = 2.5
 """How long to wait, after asking the server to stop, before forcing it to drop connections."""
 
+DEFAULT_PORT = 7000
+"""The public port of the app, the only one the launcher forwards."""
+
+HTTP_PORT_ENV = "ARDUINO_APP_HTTP_PORT"
+"""Environment variable overriding the bind port of the default port, while the URLs keep showing it."""
+
+
+def _bind_port(port: int) -> int:
+    """Return the port to bind for the given public port, honouring HTTP_PORT_ENV for DEFAULT_PORT only."""
+    value = os.getenv(HTTP_PORT_ENV)
+    if port != DEFAULT_PORT or not value:
+        return port
+    try:
+        bind_port = int(value)
+        if 1 <= bind_port <= 65535:
+            return bind_port
+    except ValueError:
+        pass
+    logger.warning(f"Ignoring {HTTP_PORT_ENV}={value!r}: expected an integer between 1 and 65535")
+    return port
+
 
 @brick
 class WebUI:
@@ -47,7 +68,7 @@ class WebUI:
     def __init__(
         self,
         addr: str = "0.0.0.0",
-        port: int = 7000,
+        port: int = DEFAULT_PORT,
         ui_path_prefix: str = "",
         api_path_prefix: str = "",
         assets_dir_path: str = "/app/assets",
@@ -60,7 +81,8 @@ class WebUI:
 
         Args:
             addr (str, optional): Server bind address. Defaults to "0.0.0.0" (all interfaces).
-            port (int, optional): Server port number. Defaults to 7000.
+            port (int, optional): Server port number, also used in the URLs. Defaults to 7000.
+                For port 7000, the ARDUINO_APP_HTTP_PORT environment variable, when set, overrides the bind port only.
             ui_path_prefix (str, optional): URL prefix for UI routes. Defaults to "" (root).
             api_path_prefix (str, optional): URL prefix for API routes. Defaults to "" (root).
             assets_dir_path (str, optional): Path to static assets directory. Defaults to "/app/assets".
@@ -105,6 +127,7 @@ class WebUI:
                 return s.getsockname()[1]
 
         self._port = port if port != 0 else pick_free_port()
+        self._bind_port = _bind_port(self._port)
         self._ui_path_prefix = ui_path_prefix
         self._api_path_prefix = api_path_prefix
         self._assets_dir_path = os.path.abspath(assets_dir_path)
@@ -157,7 +180,7 @@ class WebUI:
         config = uvicorn.Config(
             self.app,
             host=self._addr,
-            port=self._port,
+            port=self._bind_port,
             log_level="warning",
             timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_TIMEOUT_S,
         )

@@ -54,13 +54,15 @@ WebSocket messages can only be delivered while the server is running: call `send
 | Parameter | Default | Description |
 | --- | --- | --- |
 | `addr` | `"0.0.0.0"` | Server bind address |
-| `port` | `7000` | Server port (`0` picks a free port) |
+| `port` | `7000` | Server port shown in the URLs (`0` picks a free port) |
 | `ui_path_prefix` | `""` | URL prefix for UI routes |
 | `api_path_prefix` | `""` | URL prefix for API routes |
 | `assets_dir_path` | `"/app/assets"` | Static assets directory; must contain an `index.html` if present, otherwise `start()` raises `RuntimeError` |
 | `certs_dir_path` | `"/app/certs"` | TLS certificates directory |
 | `use_tls` | `False` | Enable TLS/HTTPS |
 | `cors_origins` | `"*"` | CORS allowed origins (`"*"`, comma-separated list, or `""` to disable) |
+
+When `port` is the default `7000`, the `ARDUINO_APP_HTTP_PORT` environment variable, when set to a port between 1 and 65535, overrides the port the server binds to, while `url`, `local_url` and the logged URLs keep showing `7000`. This lets a proxy in front of the app serve the public port and forward to the internal one. Invalid values are logged and ignored, and any other `port` ignores the variable.
 
 ## Main methods
 
