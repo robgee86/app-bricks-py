@@ -40,7 +40,6 @@ from .protocol import ErrorCode, LauncherError, Mode, Ping, Request, Start, Stat
 logger = logging.getLogger("arduino.app_tools.app_launcher")
 
 DEFAULT_PRELOAD = "arduino.app_utils,arduino.app_peripherals.camera,arduino.app_peripherals.microphone,arduino.app_bricks.web_ui"
-DEFAULT_LINK = "/home/app/.launcher/current"
 DEFAULT_RUN_SH = "/run.sh"
 PORT_OFFSET = 10000
 STREAMLIT_UI_PACKAGE = "arduino.app_bricks.streamlit_ui"
@@ -56,7 +55,6 @@ class Config:
 
     preload: tuple[str, ...]
     socket_path: str
-    link_path: str
     ports: tuple[int, ...]
     stop_timeout_s: float
     run_sh: str
@@ -72,7 +70,6 @@ class Config:
         return cls(
             preload=tuple(name.strip() for name in env.get("APP_LAUNCHER_PRELOAD", DEFAULT_PRELOAD).split(",") if name.strip()),
             socket_path=env.get("APP_LAUNCHER_SOCKET", protocol.DEFAULT_SOCKET),
-            link_path=env.get("APP_LAUNCHER_LINK", DEFAULT_LINK),
             ports=tuple(int(port) for port in env.get("APP_LAUNCHER_PORTS", "").split(",") if port.strip()),
             stop_timeout_s=float(env.get("APP_LAUNCHER_STOP_TIMEOUT_S", "5")),
             run_sh=env.get("APP_LAUNCHER_RUN_SH", DEFAULT_RUN_SH),
@@ -211,8 +208,6 @@ class Supervisor:
         return None
 
     async def _open(self) -> None:
-        if not os.path.isdir(os.path.dirname(self._config.link_path)):
-            logger.warning(f"{os.path.dirname(self._config.link_path)} does not exist: the app folder will not be linked")
         self._control = await asyncio.start_unix_server(self._on_control, sock=self._bind_control_socket(), limit=protocol.MAX_LINE_BYTES)
         await self._ingress.start()
 
@@ -330,7 +325,6 @@ class Supervisor:
         prepare_ms = _ms_since(started)
 
         started = time.monotonic()
-        self._point_link(app)
         output_fd, input_fd = os.pipe()
         os.set_blocking(output_fd, False)
         runner = child.runner(app)
@@ -504,20 +498,7 @@ class Supervisor:
             port = min(self._config.ports, default=None)
         return port
 
-    # App folder
-
-    def _point_link(self, app: str) -> None:
-        # For the apps that hardcode /app, a link to this one: the library itself follows APP_HOME
-        link = self._config.link_path
-        if not os.path.isdir(os.path.dirname(link)):
-            return
-        if os.path.isdir(link) and not os.path.islink(link):
-            os.rmdir(link)
-        temporary = f"{link}.{os.getpid()}.tmp"
-        with suppress(FileNotFoundError):
-            os.unlink(temporary)
-        os.symlink(app, temporary)
-        os.replace(temporary, link)
+    # App output
 
     def _open_log(self, app: str) -> AppLog | None:
         try:

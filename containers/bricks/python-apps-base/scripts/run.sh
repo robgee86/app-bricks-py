@@ -20,6 +20,31 @@ if [ -z "$PYTHONUNBUFFERED" ]; then
   export PYTHONUNBUFFERED=1
 fi
 
+if [ "${OPENCV_DEBUG:-0}" = "1" ]; then
+  export OPENCV_LOG_LEVEL="${OPENCV_LOG_LEVEL:-DEBUG}"
+  export OPENCV_VIDEOIO_DEBUG="${OPENCV_VIDEOIO_DEBUG:-1}"
+  export GST_DEBUG="${GST_DEBUG:-3}"
+  export GST_DEBUG_NO_COLOR="${GST_DEBUG_NO_COLOR:-1}"
+fi
+
+provision_devices() {
+  # The ALSA wrapped devices config is baked into the image: generate it only when
+  # missing, e.g. with another HOME
+  [ -f "$HOME/.asoundrc" ] || bash /provision-alsa-devices.sh
+
+  # Merge the host DSP payload and yaml config into /usr/share/hexagon-dsp,
+  # where the fastrpc client libraries look for them. The script ships with the
+  # libraries in python-base. Best-effort: a failure here only means the DSP is
+  # unavailable, the app still starts.
+  sh /provision-fastrpc-dsp.sh || echo "Warning: fastrpc DSP provisioning failed"
+}
+
+# The launcher runs each app from its own folder, never /app: devices provisioned once
+if [ "$1" = "serve" ]; then
+  provision_devices
+  exec arduino-app-launcher
+fi
+
 BASE_DIR="${APP_DIR:-/app}"
 CACHE_DIR="$BASE_DIR/.cache"
 APP_YAML="$BASE_DIR/app.yaml"
@@ -44,13 +69,6 @@ if [ "${ENABLE_CORE_DUMPS:-0}" != "1" ]; then
     -print -delete 2>/dev/null || true
 fi
 
-if [ "${OPENCV_DEBUG:-0}" = "1" ]; then
-  export OPENCV_LOG_LEVEL="${OPENCV_LOG_LEVEL:-DEBUG}"
-  export OPENCV_VIDEOIO_DEBUG="${OPENCV_VIDEOIO_DEBUG:-1}"
-  export GST_DEBUG="${GST_DEBUG:-3}"
-  export GST_DEBUG_NO_COLOR="${GST_DEBUG_NO_COLOR:-1}"
-fi
-
 check_streamlit_ui() {
   grep -q "arduino:streamlit_ui" "$APP_YAML"
 }
@@ -72,24 +90,6 @@ needs_venv() {
   done
   check_streamlit_ui
 }
-
-provision_devices() {
-  # The ALSA wrapped devices config is baked into the image: generate it only when
-  # missing, e.g. with another HOME
-  [ -f "$HOME/.asoundrc" ] || bash /provision-alsa-devices.sh
-
-  # Merge the host DSP payload and yaml config into /usr/share/hexagon-dsp,
-  # where the fastrpc client libraries look for them. The script ships with the
-  # libraries in python-base. Best-effort: a failure here only means the DSP is
-  # unavailable, the app still starts.
-  sh /provision-fastrpc-dsp.sh || echo "Warning: fastrpc DSP provisioning failed"
-}
-
-# The launcher runs the apps itself: no app folder yet, devices provisioned once
-if [ "$1" = "serve" ]; then
-  provision_devices
-  exec arduino-app-launcher
-fi
 
 # Installs and the app run from the app folder, whatever the image WORKDIR
 cd "$BASE_DIR"
