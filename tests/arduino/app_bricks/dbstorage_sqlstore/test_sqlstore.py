@@ -784,3 +784,10 @@ def test_read_with_no_limit(open_sqlstore_database: SQLStore):
 
     assert len(db.read("limit_table", limit=None)) == 2
     assert len(db.read("limit_table", limit=-1)) == 2
+
+
+def test_the_database_is_in_the_data_folder_of_the_app(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_HOME", str(tmp_path))
+    db = SQLStore(database_name="readings")
+    assert db.database_name == str(tmp_path / "data" / "readings.db")
+    assert (tmp_path / "data").is_dir()
