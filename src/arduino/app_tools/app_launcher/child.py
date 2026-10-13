@@ -31,10 +31,13 @@ class Launch:
     env: Mapping[str, str]
     """The supervisor environment with the requested one on top."""
     http_port: int
+    """The port the app binds, which the launcher forwards the public one to."""
     output_fd: int
     runner: Runner = Runner.PYTHON
     interpreter: str | None = None
     """The app venv interpreter, set only when the app has dependencies of its own."""
+    public_port: int = 7000
+    """The port users reach the app on, shown in the URLs the app prints."""
 
     @property
     def main_py(self) -> str:
@@ -45,7 +48,17 @@ class Launch:
         """The command the child execs, None when it runs main.py warm in this process."""
         if self.runner is Runner.STREAMLIT:
             python = self.interpreter or sys.executable
-            return [python, "-m", "streamlit", "run", "--server.port", str(self.http_port), self.main_py]
+            return [
+                python,
+                "-m",
+                "streamlit",
+                "run",
+                "--server.port",
+                str(self.http_port),
+                "--browser.serverPort",
+                str(self.public_port),
+                self.main_py,
+            ]
         if self.interpreter:
             return [self.interpreter, self.main_py]
         return None
