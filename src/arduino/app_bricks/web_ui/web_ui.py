@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse
 from fastapi_socketio import SocketManager
 
 from arduino.app_utils import brick, Logger
-from arduino.app_utils.apphome import app_path
+from arduino.app_utils.apphome import app_folder
 
 if TYPE_CHECKING:
     # Type hint only: importing the camera package at runtime would load cv2 in every app using WebUI
@@ -126,8 +126,8 @@ class WebUI:
         self._bind_port = _bind_port(self._port)
         self._ui_path_prefix = ui_path_prefix
         self._api_path_prefix = api_path_prefix
-        self._assets_dir_path = os.path.abspath(app_path("assets") if assets_dir_path is None else assets_dir_path)
-        self._certs_dir_path = os.path.abspath(app_path("certs") if certs_dir_path is None else certs_dir_path)
+        self._assets_dir_path = os.path.abspath(app_folder("assets") if assets_dir_path is None else assets_dir_path)
+        self._certs_dir_path = os.path.abspath(app_folder("certs") if certs_dir_path is None else certs_dir_path)
         self._use_tls = use_tls
         self._protocol = "https" if self._use_tls else "http"
         self._server: uvicorn.Server | None = None

@@ -8,7 +8,7 @@ import threading
 from typing import Any
 
 from arduino.app_utils import brick, Logger
-from arduino.app_utils.apphome import app_path
+from arduino.app_utils.apphome import app_folder
 
 logger = Logger("SQLStore")
 
@@ -43,7 +43,7 @@ class SQLStore:
             database_name (str, optional): Name of the SQLite database file.
                 Defaults to "arduino.db".
         """
-        data_dir = app_path("data")
+        data_dir = app_folder("data")
         os.makedirs(data_dir, exist_ok=True)
         self.database_name = f"{data_dir}/{database_name}"
         if not self.database_name.endswith(".db"):
