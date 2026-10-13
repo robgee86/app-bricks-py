@@ -13,8 +13,7 @@ import signal
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 
-from .applog import AppLog
-from .ingress import CHUNK_BYTES
+from .applog import CHUNK_BYTES, AppLog
 from .protocol import ErrorCode, LauncherError
 
 logger = logging.getLogger("arduino.app_tools.app_launcher")
