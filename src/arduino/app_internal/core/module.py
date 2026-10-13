@@ -8,6 +8,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any
 
+from arduino.app_utils.apphome import app_path
 from arduino.app_utils.utils import get_board_name
 
 application_config_file_name: str = "app.yaml"
@@ -24,34 +25,18 @@ def _read_yaml(path: str) -> Any:  # noqa: ANN401
 
 
 def get_app_config() -> dict[str, Any] | None:
-    """Gets app.yaml application configuration."""
-    config_path = None
-    app_root_dir = os.getenv("APP_HOME")
-    if app_root_dir and app_root_dir != "":
+    """Gets app.yaml application configuration, from the app folder or else from the parent of the main script folder."""
+    config_path = app_path(application_config_file_name)
+    if not os.path.exists(config_path):
+        main_file = getattr(sys.modules["__main__"], "__file__", None)
+        if not main_file:
+            return None
+        app_root_dir = os.path.dirname(os.path.dirname(os.path.abspath(main_file)))
         config_path = os.path.join(app_root_dir, application_config_file_name)
         if not os.path.exists(config_path):
-            config_path = None
+            return None
 
-    if config_path is None:
-        app_root_dir = "/app"
-        config_path = os.path.join(app_root_dir, application_config_file_name)
-        if not os.path.exists(config_path):
-            config_path = None
-
-    if config_path is None:
-        main_module = sys.modules["__main__"]
-        main_file = getattr(main_module, "__file__", None)
-        if main_file:
-            main_path = os.path.abspath(main_file)
-            app_root_dir = os.path.dirname(os.path.dirname(main_path))
-            config_path = os.path.join(app_root_dir, application_config_file_name)
-            if not os.path.exists(config_path):
-                return None
-
-    if config_path and os.path.exists(config_path):
-        return _read_yaml(config_path)
-
-    return None
+    return _read_yaml(config_path)
 
 
 def get_brick_config(cls: type) -> dict[str, Any] | None:

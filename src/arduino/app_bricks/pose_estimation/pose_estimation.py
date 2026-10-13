@@ -19,6 +19,7 @@ import websockets
 
 from arduino.app_peripherals.camera import BaseCamera, Camera
 from arduino.app_utils import brick, Logger
+from arduino.app_utils.apphome import app_path
 from arduino.app_utils.image.adjustments import compress_to_jpeg
 from arduino.app_internal.core.module import load_brick_compose_file, resolve_address
 
@@ -42,8 +43,6 @@ logger = Logger("PoseEstimation")
 _POSE_CLASSIFIER_PATH = Path(__file__).resolve().parent / "assets" / "pose_classifier.npz"
 
 _UNREADABLE_HOLD_SEC = 0.5
-
-_CUSTOM_POSES_DIR = "/app/poses"
 
 """Names of the built-in poses, the ones an app can listen to without teaching anything."""
 BUILTIN_POSE_NAMES: tuple[str, ...] = load_pose_classifier(_POSE_CLASSIFIER_PATH)[2]
@@ -72,7 +71,7 @@ class PoseEstimation:
         draw_low_confidence_points: bool = True,
         bbox_padding: float | tuple[float, float, float, float] = 0.0,
         poses: list[str | dict[str, Any]] | None = None,
-        custom_poses_dir: str = _CUSTOM_POSES_DIR,
+        custom_poses_dir: str | None = None,
     ) -> None:
         """Initialize the PoseEstimation brick.
 
@@ -91,10 +90,10 @@ class PoseEstimation:
                 actions only: the typical length of one occurrence, 0.7 by default); its
                 `thresholds` and `smoothing` default to the values derived from its photos. The
                 built-in poses left out stay in the classifier as negatives and never fire.
-            custom_poses_dir (str): Where the photo folders of the custom poses live, one folder per
+            custom_poses_dir (str | None): Where the photo folders of the custom poses live, one folder per
                 pose named like the pose, plus an optional `other` folder with photos of what is not
                 any of your poses. The brick writes its reports in the pose folders and what it
-                already read in `.cache`. Default "/app/poses".
+                already read in `.cache`. Defaults to the `poses` folder of the app, usually "/app/poses".
             confidence (float): Minimum detection score for a person to be reported. The score is
                 the mean of the person's 17 keypoint scores, so partly visible people score lower.
                 Applied by the model runner, so detections below it are neither emitted nor drawn
@@ -126,7 +125,7 @@ class PoseEstimation:
                 in `custom_poses_dir` carries the name of a built-in pose or is not a valid pose name.
             RuntimeError: If the model runner host address could not be resolved.
         """
-        self._custom_poses_dir = Path(custom_poses_dir)
+        self._custom_poses_dir = Path(app_path("poses") if custom_poses_dir is None else custom_poses_dir)
         self._pose_specs = parse_poses(poses, BUILTIN_POSE_NAMES, custom_folders(self._custom_poses_dir, BUILTIN_POSE_NAMES))
         self._camera = camera if camera else Camera(fps=30)
         self._confidence = confidence

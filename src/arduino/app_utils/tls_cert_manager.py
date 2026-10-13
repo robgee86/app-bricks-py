@@ -13,8 +13,11 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization
 from datetime import datetime, timedelta, UTC
 
+from arduino.app_utils.apphome import app_path
 
-DEFAULT_CERTS_DIR = "/app/certs"
+
+DEFAULT_CERTS_DIR = app_path("certs")
+"""The certs folder of the app, shared by all bricks."""
 
 
 class CertsParams(TypedDict):
@@ -42,7 +45,7 @@ class TLSCertificateManager:
     """Certificate manager for TLS certificates.
 
     This class handles certificate generation and retrieval on a Brick basis. By default, all bricks
-    share certificates from the default directory (/app/certs).
+    share certificates from the certs folder of the app, usually /app/certs.
     Components can use their own certificates by providing a different certs_dir path.
     """
 
@@ -52,7 +55,7 @@ class TLSCertificateManager:
     @classmethod
     def get_or_create_certificates(
         cls,
-        certs_dir: str = DEFAULT_CERTS_DIR,
+        certs_dir: str | None = None,
         country_name: str = DEFAULT_CERTS_PARAMS["country_name"],
         state_or_province_name: str = DEFAULT_CERTS_PARAMS["state_or_province_name"],
         locality_name: str = DEFAULT_CERTS_PARAMS["locality_name"],
@@ -62,15 +65,15 @@ class TLSCertificateManager:
     ) -> tuple[str, str]:
         """Get or create TLS certificates at the specified path.
 
-        By default, uses shared certificates in /app/certs. If a different certs_dir is provided,
+        By default, uses shared certificates in the certs folder of the app. If a different certs_dir is provided,
         uses certificates specific to that directory (useful for brick-specific certificates).
 
         Concurrent access is managed to prevent race conditions when multiple bricks attempt to
         access certificates simultaneously.
 
         Args:
-            certs_dir (str, optional): Directory for certificates. Defaults to /app/certs (shared
-                by all bricks). Provide a different path for brick-specific certificates.
+            certs_dir (str, optional): Directory for certificates. Defaults to the certs folder of the app,
+                usually /app/certs, shared by all bricks. Provide a different path for brick-specific certificates.
             country_name (str, optional): Country name for the certificate. Defaults to "IT".
             state_or_province_name (str, optional): State or province name for the certificate.
                 Defaults to "Piedmont".
@@ -106,12 +109,12 @@ class TLSCertificateManager:
                 raise RuntimeError(f"Failed to generate TLS certificates in {target_dir}: {e}") from e
 
     @classmethod
-    def certificates_exist(cls, certs_dir: str = DEFAULT_CERTS_DIR) -> bool:
+    def certificates_exist(cls, certs_dir: str | None = None) -> bool:
         """Check if TLS certificates exist in the given directory.
 
         Args:
             certs_dir (str, optional): Directory for certificates.
-                Defaults to /app/certs.
+                Defaults to the certs folder of the app.
 
         Returns:
             bool: True if both certificate and key files exist, False otherwise.
@@ -122,11 +125,11 @@ class TLSCertificateManager:
         return os.path.exists(cert_path) and os.path.exists(key_path)
 
     @classmethod
-    def get_certificates_paths(cls, certs_dir: str = DEFAULT_CERTS_DIR) -> tuple[str, str]:
+    def get_certificates_paths(cls, certs_dir: str | None = None) -> tuple[str, str]:
         """Get the paths to the TLS certificate and private key files.
 
         Args:
-            certs_dir (str, optional): Directory for certificates. Defaults to /app/certs.
+            certs_dir (str, optional): Directory for certificates. Defaults to the certs folder of the app.
         Returns:
             tuple[str, str]: Paths to certificate_file and private_key_file
         """
@@ -134,11 +137,11 @@ class TLSCertificateManager:
         return cls.get_certificate_path(target_dir), cls.get_private_key_path(target_dir)
 
     @classmethod
-    def get_certificate_path(cls, certs_dir: str = DEFAULT_CERTS_DIR) -> str:
+    def get_certificate_path(cls, certs_dir: str | None = None) -> str:
         """Get the path to the TLS certificate file.
 
         Args:
-            certs_dir (str, optional): Directory for certificates. Defaults to /app/certs.
+            certs_dir (str, optional): Directory for certificates. Defaults to the certs folder of the app.
 
         Returns:
             str: Path to the certificate file.
@@ -146,11 +149,11 @@ class TLSCertificateManager:
         return os.path.join(certs_dir or DEFAULT_CERTS_DIR, "cert.pem")
 
     @classmethod
-    def get_private_key_path(cls, certs_dir: str = DEFAULT_CERTS_DIR) -> str:
+    def get_private_key_path(cls, certs_dir: str | None = None) -> str:
         """Get the path to the TLS private key file.
 
         Args:
-            certs_dir (str, optional): Directory for certificates. Defaults to /app/certs.
+            certs_dir (str, optional): Directory for certificates. Defaults to the certs folder of the app.
 
         Returns:
             str: Path to the private key file.
