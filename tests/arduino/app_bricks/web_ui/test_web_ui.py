@@ -4,7 +4,6 @@
 
 import asyncio
 import importlib.util
-import os
 import socket
 import threading
 import time
@@ -27,8 +26,6 @@ def test_webui_init_defaults():
     assert ui._port == 7000
     assert ui._ui_path_prefix == ""
     assert ui._api_path_prefix == ""
-    assert ui._assets_dir_path.endswith(os.path.join("app", "assets"))
-    assert ui._certs_dir_path.endswith(os.path.join("app", "certs"))
     assert ui._use_tls is False
     assert ui._protocol == "http"
     assert ui._server is None

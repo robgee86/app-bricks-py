@@ -79,6 +79,6 @@ result = db.execute_sql("SELECT COUNT(*) FROM users")
 
 ## Understanding Database Operations
 
-The SQLStore automatically creates the database file inside the `data` folder of your application, usually `/app/data`. The brick supports automatic type inference when creating tables, mapping Python types (*int*, *float*, *str*, *bytes*) to corresponding SQLite column types (*INTEGER*, *REAL*, *TEXT*, *BLOB*).
+The SQLStore automatically creates the database file inside the `data` folder of your application. The brick supports automatic type inference when creating tables, mapping Python types (*int*, *float*, *str*, *bytes*) to corresponding SQLite column types (*INTEGER*, *REAL*, *TEXT*, *BLOB*).
 
 The `store()` method can automatically create tables if they don't exist by analyzing the data types of the provided values. This makes it easy to get started without defining schemas upfront, while still allowing explicit table creation for more control over column definitions and constraints.

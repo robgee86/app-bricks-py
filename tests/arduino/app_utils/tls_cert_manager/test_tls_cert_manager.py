@@ -117,6 +117,13 @@ class TestHelperMethods:
         actual_path = TLSCertificateManager.get_private_key_path(certs_dir=temp_certs_dir)
         assert actual_path == expected_path
 
+    def test_the_default_certs_are_in_the_app_folder_when_used(self, monkeypatch, tmp_path, reset_manager):
+        # Set after the import, as the launcher does for a preloaded library
+        monkeypatch.setenv("APP_HOME", str(tmp_path))
+        cert_path, key_path = TLSCertificateManager.get_or_create_certificates()
+        assert (cert_path, key_path) == (str(tmp_path / "certs" / "cert.pem"), str(tmp_path / "certs" / "key.pem"))
+        assert TLSCertificateManager.certificates_exist()
+
 
 class TestConcurrentAccess:
     """Test concurrent access and race condition handling."""

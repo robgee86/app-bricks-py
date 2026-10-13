@@ -93,7 +93,7 @@ class PoseEstimation:
             custom_poses_dir (str | None): Where the photo folders of the custom poses live, one folder per
                 pose named like the pose, plus an optional `other` folder with photos of what is not
                 any of your poses. The brick writes its reports in the pose folders and what it
-                already read in `.cache`. Defaults to the `poses` folder of the app, usually "/app/poses".
+                already read in `.cache`. Defaults to the `poses` folder of the app.
             confidence (float): Minimum detection score for a person to be reported. The score is
                 the mean of the person's 17 keypoint scores, so partly visible people score lower.
                 Applied by the model runner, so detections below it are neither emitted nor drawn
