@@ -180,16 +180,17 @@ class VideoObjectDetection:
                             self._process_message(ws, message)
                         except ConnectionClosedOK:
                             raise
-                        except (TimeoutError, ConnectionRefusedError, ConnectionClosedError):
-                            logger.warning(f"WebSocket connection lost. Retrying...")
+                        except (OSError, ConnectionClosedError):
+                            logger.warning("WebSocket connection lost. Retrying...")
                             raise
                         except Exception as e:
                             logger.exception(f"Failed to process detection: {e}")
             except ConnectionClosedOK:
                 logger.debug(f"WebSocket disconnected cleanly, exiting loop.")
                 return
-            except (TimeoutError, ConnectionRefusedError, ConnectionClosedError):
-                logger.debug(f"Waiting for model runner. Retrying...")
+            # OSError covers a refused connection, a timeout and a name not resolved yet
+            except (OSError, ConnectionClosedError):
+                logger.debug("Waiting for model runner. Retrying...")
                 time.sleep(2)
                 continue
             except Exception as e:
