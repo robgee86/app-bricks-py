@@ -31,7 +31,7 @@ class Launch:
     env: Mapping[str, str]
     """The supervisor environment with the requested one on top."""
     ports: Mapping[int, int]
-    """The internal port the app binds for each public port the launcher forwards."""
+    """The internal port the app binds for each of its public ports."""
     output_fd: int
     runner: Runner = Runner.PYTHON
     interpreter: str | None = None
@@ -54,7 +54,7 @@ class Launch:
 
     @property
     def _streamlit_port_options(self) -> list[str]:
-        # Streamlit binds the internal port of its public one, or the public one itself when it is not forwarded
+        # Streamlit binds the internal port of its public one, or the public one itself when the app does not list it
         if self.streamlit_port is None:
             return []
         internal = self.ports.get(self.streamlit_port)
@@ -89,7 +89,7 @@ def _venv_has_packages(app: str) -> bool:
 
 
 def environment(launch: Launch) -> dict[str, str]:
-    """Builds the app environment: the launch one, an ARDUINO_APP_PORT_<public> per forwarded port and the run.sh additions."""
+    """Builds the app environment: the launch one, an ARDUINO_APP_PORT_<public> per app port and the run.sh additions."""
     env = {**launch.env, **{port_variable(public): str(internal) for public, internal in launch.ports.items()}, "PYTHONUNBUFFERED": "1"}
     bricks = os.path.join(launch.app, "bricks")
     if os.path.isdir(bricks):

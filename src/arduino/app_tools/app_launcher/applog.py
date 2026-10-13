@@ -5,6 +5,8 @@
 import os
 
 MAX_BYTES = 5 * 1024 * 1024
+CHUNK_BYTES = 64 * 1024
+"""How much output is read at once."""
 
 
 class AppLog:
