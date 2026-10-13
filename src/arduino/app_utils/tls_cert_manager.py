@@ -16,8 +16,9 @@ from datetime import datetime, timedelta, UTC
 from arduino.app_utils.apphome import app_folder
 
 
-DEFAULT_CERTS_DIR = app_folder("certs")
-"""The certs folder of the app, shared by all bricks."""
+def _certs_dir(certs_dir: str | None) -> str:
+    # Resolved on each call: under the launcher this module is imported before the app folder is known
+    return certs_dir or app_folder("certs")
 
 
 class CertsParams(TypedDict):
@@ -45,7 +46,7 @@ class TLSCertificateManager:
     """Certificate manager for TLS certificates.
 
     This class handles certificate generation and retrieval on a Brick basis. By default, all bricks
-    share certificates from the certs folder of the app, usually /app/certs.
+    share certificates from the certs folder of the app.
     Components can use their own certificates by providing a different certs_dir path.
     """
 
@@ -73,7 +74,7 @@ class TLSCertificateManager:
 
         Args:
             certs_dir (str, optional): Directory for certificates. Defaults to the certs folder of the app,
-                usually /app/certs, shared by all bricks. Provide a different path for brick-specific certificates.
+                shared by all bricks. Provide a different path for brick-specific certificates.
             country_name (str, optional): Country name for the certificate. Defaults to "IT".
             state_or_province_name (str, optional): State or province name for the certificate.
                 Defaults to "Piedmont".
@@ -88,7 +89,7 @@ class TLSCertificateManager:
         Raises:
             RuntimeError: If certificate generation fails.
         """
-        target_dir = certs_dir or DEFAULT_CERTS_DIR
+        target_dir = _certs_dir(certs_dir)
         cert_path = os.path.join(target_dir, "cert.pem")
         key_path = os.path.join(target_dir, "key.pem")
 
@@ -119,7 +120,7 @@ class TLSCertificateManager:
         Returns:
             bool: True if both certificate and key files exist, False otherwise.
         """
-        target_dir = certs_dir or DEFAULT_CERTS_DIR
+        target_dir = _certs_dir(certs_dir)
         cert_path = os.path.join(target_dir, "cert.pem")
         key_path = os.path.join(target_dir, "key.pem")
         return os.path.exists(cert_path) and os.path.exists(key_path)
@@ -133,7 +134,7 @@ class TLSCertificateManager:
         Returns:
             tuple[str, str]: Paths to certificate_file and private_key_file
         """
-        target_dir = certs_dir or DEFAULT_CERTS_DIR
+        target_dir = _certs_dir(certs_dir)
         return cls.get_certificate_path(target_dir), cls.get_private_key_path(target_dir)
 
     @classmethod
@@ -146,7 +147,7 @@ class TLSCertificateManager:
         Returns:
             str: Path to the certificate file.
         """
-        return os.path.join(certs_dir or DEFAULT_CERTS_DIR, "cert.pem")
+        return os.path.join(_certs_dir(certs_dir), "cert.pem")
 
     @classmethod
     def get_private_key_path(cls, certs_dir: str | None = None) -> str:
@@ -158,7 +159,7 @@ class TLSCertificateManager:
         Returns:
             str: Path to the private key file.
         """
-        return os.path.join(certs_dir or DEFAULT_CERTS_DIR, "key.pem")
+        return os.path.join(_certs_dir(certs_dir), "key.pem")
 
     @classmethod
     def _get_dir_lock(cls, target_dir: str) -> threading.Lock:

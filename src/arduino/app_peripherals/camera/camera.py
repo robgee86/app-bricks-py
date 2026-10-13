@@ -111,7 +111,7 @@ class Camera:
                     port (int): Port to bind the server to. Default: 8080.
                     timeout (int): Connection timeout in seconds. Default: 3.
                     certs_dir_path (str): Path to directory containing TLS certificates.
-                        Default: the certs folder of the app, usually "/app/certs".
+                        Default: the certs folder of the app.
                     use_tls (bool): Enable TLS for secure connections. If True, 'encrypt'
                         will be ignored. Default: False.
                     secret (str): Secret key for authentication/encryption. Empty string

@@ -36,7 +36,7 @@ class SQLStore:
     def __init__(self, database_name: str = "arduino.db") -> None:
         """Initialize the SQLStore client with automatic directory setup.
 
-        Creates the database file in the `data` folder of the app, usually `/app/data`. If the filename doesn't end with `.db`, the extension
+        Creates the database file in the `data` folder of the app. If the filename doesn't end with `.db`, the extension
         is automatically added.
 
         Args:

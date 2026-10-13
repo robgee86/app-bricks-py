@@ -81,8 +81,8 @@ class WebUI:
                 The ARDUINO_APP_PORT_<port> environment variable, when set, overrides the bind port only.
             ui_path_prefix (str, optional): URL prefix for UI routes. Defaults to "" (root).
             api_path_prefix (str, optional): URL prefix for API routes. Defaults to "" (root).
-            assets_dir_path (str, optional): Path to static assets directory. Defaults to the "assets" folder of the app, usually "/app/assets".
-            certs_dir_path (str, optional): Path to TLS certificates directory. Defaults to the "certs" folder of the app, usually "/app/certs".
+            assets_dir_path (str, optional): Path to static assets directory. Defaults to the "assets" folder of the app.
+            certs_dir_path (str, optional): Path to TLS certificates directory. Defaults to the "certs" folder of the app.
             use_tls (bool, optional): Enable TLS/HTTPS. Defaults to False.
             use_ssl (bool, optional): Deprecated. Use use_tls instead. Defaults to None.
             cors_origins (str, optional): CORS allowed origins. Can be "*" for all origins, a
