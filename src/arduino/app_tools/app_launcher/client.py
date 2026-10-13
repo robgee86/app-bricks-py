@@ -54,8 +54,10 @@ def main(argv: Sequence[str]) -> int:
         }
     elif args.cmd == "stop" and args.app:
         message["app"] = os.path.abspath(args.app)
+    # A start may install the app dependencies first
+    timeout_s = 60.0 + (float(os.environ.get("APP_LAUNCHER_PREPARE_TIMEOUT_S", "600")) if args.cmd == "start" else 0.0)
     try:
-        response = request(message, args.socket)
+        response = request(message, args.socket, timeout_s)
     except OSError as e:
         print(f"Cannot reach the launcher at {args.socket}: {e}", file=sys.stderr)
         return 1

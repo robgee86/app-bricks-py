@@ -33,6 +33,19 @@ signal.pause()
 """
 
 
+# Stands in for `run.sh prepare`: a venv on the test interpreter, a marker per run, a failure on request
+FAKE_RUN_SH = """#!/bin/sh
+echo "installing $APP_DIR/python/requirements.txt"
+if grep -qs missing-package "$APP_DIR/python/requirements.txt"; then
+  echo "No solution found for missing-package"
+  exit 1
+fi
+mkdir -p "$APP_DIR/.cache/.venv/bin"
+ln -sf "{python}" "$APP_DIR/.cache/.venv/bin/python"
+echo prepared >> "$APP_DIR/prepared.marker"
+"""
+
+
 def free_port():
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -58,6 +71,9 @@ def spawn(root, preload="json", port=None):
     (modules / "streamlit" / "__init__.py").touch()
     (modules / "streamlit" / "__main__.py").write_text(FAKE_STREAMLIT)
     (root / "launcher").mkdir(exist_ok=True)
+    run_sh = root / "run.sh"
+    run_sh.write_text(FAKE_RUN_SH.format(python=sys.executable))
+    run_sh.chmod(0o755)
     env = {
         **os.environ,
         "PYTHONPATH": str(modules),
@@ -66,6 +82,7 @@ def spawn(root, preload="json", port=None):
         "APP_LAUNCHER_LINK": str(root / "launcher" / "current"),
         "APP_LAUNCHER_PORTS": str(port or free_port()),
         "APP_LAUNCHER_STOP_TIMEOUT_S": "1",
+        "APP_LAUNCHER_RUN_SH": str(run_sh),
         "GREETING": "from the launcher",
         "INHERITED": "yes",
     }
@@ -123,16 +140,22 @@ def gone(pid):
     return False
 
 
-def log_of(app):
+def log_of(app, until=""):
+    """Waits for the app log to hold `until` and returns it."""
     log = app / ".cache" / "logs" / "app.log"
-    return wait_until(lambda: log.exists() and log.read_text())
+
+    def written():
+        text = log.read_text() if log.exists() else ""
+        return text if text and until in text else None
+
+    return wait_until(written)
 
 
 def test_runs_an_app_until_stopped(launcher):
     app = launcher.app("hello")
     started = launcher.request({"cmd": "start", "app": str(app), "env": {"GREETING": "hi"}, "mode": "replace"})
-    assert started["ok"] and started["warm"] and started["runner"] == "python"
-    assert set(started["timings"]) == {"stop_ms", "fork_ms"}
+    assert started["ok"] and started["warm"] and started["runner"] == "python" and not started["prepared"]
+    assert set(started["timings"]) == {"stop_ms", "prepare_ms", "fork_ms"}
 
     status = launcher.request({"cmd": "status"})
     child = {"app": str(app), "pid": started["pid"], "state": "running", "started_at": started["started_at"], "runner": "python", "warm": True}
@@ -167,9 +190,41 @@ def test_replace_stops_the_running_app_first(launcher):
 def test_runs_streamlit_apps_through_streamlit(launcher):
     app = launcher.app("dashboard", app_yaml="bricks:\n  - arduino:streamlit_ui: {}\n")
     started = launcher.request({"cmd": "start", "app": str(app)})
-    assert (started["warm"], started["runner"]) == (False, "streamlit")
-    assert log_of(app) == f"streamlit run --server.port {launcher.port + 10000} {app}/python/main.py {app}\n"
+    assert (started["warm"], started["runner"], started["prepared"]) == (False, "streamlit", True)
+    streamlit = f"streamlit run --server.port {launcher.port + 10000} {app}/python/main.py {app}\n"
+    assert log_of(app, until=streamlit).endswith(streamlit)
     assert launcher.request({"cmd": "stop"})["stopped"][0]["signal"] == signal.SIGTERM
+
+
+def test_prepares_an_app_with_dependencies_when_they_change(launcher):
+    app = launcher.app("deps")
+    requirements = app / "python" / "requirements.txt"
+    requirements.write_text("requests\n")
+    first = launcher.request({"cmd": "start", "app": str(app)})
+    assert (first["ok"], first["prepared"], first["warm"]) == (True, True, False)
+    assert first["timings"]["prepare_ms"] > 0
+    assert log_of(app, until="hello from").startswith(f"installing {requirements}\nhello from __main__ {app}/python/main.py")
+    assert (app / ".cache" / "launcher" / "prepared.sha").exists()
+
+    second = launcher.request({"cmd": "start", "app": str(app)})
+    assert (second["ok"], second["prepared"], second["warm"]) == (True, False, False)
+    assert (app / "prepared.marker").read_text() == "prepared\n"
+
+    requirements.write_text("requests==2.32.0\n")
+    assert launcher.request({"cmd": "start", "app": str(app)})["prepared"]
+    assert (app / "prepared.marker").read_text() == "prepared\nprepared\n"
+    launcher.request({"cmd": "stop"})
+
+
+def test_a_failing_preparation_starts_nothing(launcher):
+    app = launcher.app("broken")
+    (app / "python" / "requirements.txt").write_text("missing-package\n")
+    failed = launcher.request({"cmd": "start", "app": str(app)})
+    assert failed["error"]["code"] == "prepare_failed"
+    assert failed["error"]["message"].endswith(":\ninstalling " + f"{app}/python/requirements.txt\nNo solution found for missing-package")
+    assert launcher.request({"cmd": "status"})["children"] == []
+    assert not (app / ".cache" / "launcher" / "prepared.sha").exists()
+    assert log_of(app).endswith("No solution found for missing-package\n")
 
 
 def test_refuses_what_is_not_an_app(launcher):

@@ -19,6 +19,7 @@ class ErrorCode(StrEnum):
     NOT_FOUND = "not_found"
     UNSUPPORTED = "unsupported"
     BUSY = "busy"
+    PREPARE_FAILED = "prepare_failed"
     INTERNAL = "internal"
 
 
