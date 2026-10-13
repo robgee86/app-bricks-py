@@ -16,10 +16,11 @@ from urllib.parse import urlsplit
 
 from arduino.app_utils import http
 from arduino.app_utils import Logger, brick
+from arduino.app_utils.apphome import app_path
 
 logger = Logger("TPS")
 
-SCANNER_SOCKET_PATH = os.getenv("SCANNER_SOCKET_PATH", "/app/.cache/tps_location_api/scanner.sock")
+SCANNER_SOCKET_PATH = os.getenv("SCANNER_SOCKET_PATH", app_path(".cache", "tps_location_api", "scanner.sock"))
 TPS_LOC_API_URL = "https://global.skyhook.com/wps2/json/location"
 TPS_AUTH_VERSION = "2.3"
 TPS_PROTO_VERSION = "2.41"

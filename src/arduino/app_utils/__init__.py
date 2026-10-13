@@ -4,6 +4,7 @@
 
 from .app import *
 from .app import install_startup_signal_handler as _install_startup_signal_handler
+from .apphome import app_path, app_root
 from .bridge import *
 from .logger import configure_library_logger as _configure_library_logger
 from .audio import *
@@ -21,6 +22,8 @@ from .leds import *
 __all__ = [
     "App",
     "AppError",
+    "app_path",
+    "app_root",
     "brick",
     "peripheral",
     "Bridge",

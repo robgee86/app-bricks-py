@@ -8,6 +8,7 @@ import threading
 from typing import Any
 
 from arduino.app_utils import brick, Logger
+from arduino.app_utils.apphome import app_path
 
 logger = Logger("SQLStore")
 
@@ -35,14 +36,14 @@ class SQLStore:
     def __init__(self, database_name: str = "arduino.db") -> None:
         """Initialize the SQLStore client with automatic directory setup.
 
-        Creates the database file in the `/app/data`. If the filename doesn't end with `.db`, the extension
+        Creates the database file in the `data` folder of the app, usually `/app/data`. If the filename doesn't end with `.db`, the extension
         is automatically added.
 
         Args:
             database_name (str, optional): Name of the SQLite database file.
                 Defaults to "arduino.db".
         """
-        data_dir = "/app/data"
+        data_dir = app_path("data")
         os.makedirs(data_dir, exist_ok=True)
         self.database_name = f"{data_dir}/{database_name}"
         if not self.database_name.endswith(".db"):
