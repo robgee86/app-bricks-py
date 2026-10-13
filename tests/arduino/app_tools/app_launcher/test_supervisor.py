@@ -74,7 +74,6 @@ def spawn(root, preload="json", ports=""):
     (modules / "streamlit").mkdir(parents=True, exist_ok=True)
     (modules / "streamlit" / "__init__.py").touch()
     (modules / "streamlit" / "__main__.py").write_text(FAKE_STREAMLIT)
-    (root / "launcher").mkdir(exist_ok=True)
     run_sh = root / "run.sh"
     run_sh.write_text(FAKE_RUN_SH.format(python=sys.executable))
     run_sh.chmod(0o755)
@@ -83,7 +82,6 @@ def spawn(root, preload="json", ports=""):
         "PYTHONPATH": str(modules),
         "APP_LAUNCHER_PRELOAD": preload,
         "APP_LAUNCHER_SOCKET": str(root / "launcher.sock"),
-        "APP_LAUNCHER_LINK": str(root / "launcher" / "current"),
         "APP_LAUNCHER_PORTS": ports,
         "APP_LAUNCHER_STOP_TIMEOUT_S": "1",
         "APP_LAUNCHER_RUN_SH": str(run_sh),
@@ -102,7 +100,6 @@ class Launcher:
         self.socket = str(root / "launcher.sock")
         self.ports = [free_port()] if ports is None else ports
         self.port = self.ports[0] if self.ports else None
-        self.link = root / "launcher" / "current"
         self.process = spawn(root, ports=",".join(map(str, self.ports)))
         wait_until(self.answers, details=lambda: (root / "launcher.log").read_text())
 
@@ -167,7 +164,6 @@ def test_runs_an_app_until_stopped(launcher):
     child = {"app": str(app), "pid": started["pid"], "state": "running", "started_at": started["started_at"], "runner": "python", "warm": True}
     assert status["children"] == [{**child, "ports": {str(launcher.port): launcher.port + 10000}}]
     assert status["preload"] == {"modules": ["json"], "failed": []}
-    assert os.readlink(launcher.link) == str(app)
 
     assert log_of(app) == f"hello from __main__ {app}/python/main.py ARDUINO_APP_PORT_{launcher.port}={launcher.port + 10000} hi yes\n"
 

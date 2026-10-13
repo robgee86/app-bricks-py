@@ -12,7 +12,7 @@ arduino-app-launcher [--socket PATH] ping | status | start <app> [--env K=V ...]
 
 ## Processes
 
-- **Supervisor** (`supervisor.py`): one asyncio loop in one thread. Owns the control socket, the table of running apps keyed by app folder, the `/app` link, the per-app logs (`applog.py`) and the TCP ingress (`ingress.py`).
+- **Supervisor** (`supervisor.py`): one asyncio loop in one thread. Owns the control socket, the table of running apps keyed by app folder, the per-app logs (`applog.py`) and the TCP ingress (`ingress.py`).
 - **App child** (`child.py`, stdlib only): forked from the supervisor, it becomes the app the way `python main.py` would run in the classic container.
 
 ## Control socket
@@ -38,7 +38,6 @@ Errors are `{"ok":false,"error":{"code":..,"message":..}}` with `code` one of `b
 | `APP_LAUNCHER_SOCKET` | `/run/arduino-app-cli/app-launcher.sock` | Control socket; a stale one is replaced |
 | `APP_LAUNCHER_STOP_TIMEOUT_S` | `5` | Grace period between SIGTERM and SIGKILL, the CLI's container stop timeout |
 | `APP_LAUNCHER_PORTS` | none | Comma-separated public ports forwarded to the running app, see [Ports](#ports); none means no ingress |
-| `APP_LAUNCHER_LINK` | `/home/app/.launcher/current` | Symlink pointed at the running app; skipped when its folder does not exist |
 | `APP_LAUNCHER_RUN_SH` | `/run.sh` | The entrypoint whose `prepare` mode installs the app dependencies |
 | `APP_LAUNCHER_PREPARE_TIMEOUT_S` | `600` | How long a preparation may take before it is killed; the client waits this long plus a minute for a `start` |
 
@@ -79,4 +78,4 @@ The output of each app goes to `<app>/.cache/logs/app.log`, rotated at 5 MB into
 
 ## The app folder
 
-The library finds the app folder through `APP_HOME`, which the CLI sets to the app folder, mounted at its own host path: `arduino.app_utils.app_root()` returns it when it exists and `/app` otherwise, as in the classic container where `APP_HOME` is a host path the container does not have. Apps may still hardcode `/app` paths, so in the image `/app` is a root-owned symlink to `/home/app/.launcher/current`, and `WORKDIR` is `/home/app`. The classic mode bind-mounts the app folder on `/app`, which lands on `current`; in the serve mode the supervisor atomically replaces `current` with a link to the app folder on every `start`. So hardcoded `/app` paths work for one app at a time.
+Apps run with their own folder as working directory and `APP_HOME`; `/app` exists only in the classic per-app container. The CLI sets `APP_HOME` to the app folder, mounted at its own host path, and the library finds the folder through `arduino.app_utils.app_folder()`, which returns `APP_HOME` when it exists and `/app` otherwise, as in the classic container where `APP_HOME` is a host path the container does not have and the app folder is bind-mounted on `/app`.
