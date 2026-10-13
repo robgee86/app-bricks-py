@@ -54,7 +54,7 @@ App.run()
 - `count_debounce_sec` (`float`): minimum seconds a person leaving, or the people count dropping, must hold before `on_exit`/`on_count_change` report it. Default is 0 (no debounce).
 - `out_of_frame_tolerance` (`float`): how far past the frame edges a joint may be extrapolated before the skeleton counts as unreadable, as a fraction of the frame size. Default is 0.25; 0 demands every joint inside the picture.
 - `poses` (`list`, optional): list of pose names or pose dicts to listen to. Defaults to the four built-in poses. See "Built-in Poses" below.
-- `custom_poses_dir` (`str`, optional): path to the folder containing custom pose training photos. Defaults to the `poses` folder of the app, usually `/app/poses`.
+- `custom_poses_dir` (`str`, optional): path to the folder containing custom pose training photos. Defaults to the `poses` folder of the app.
 - `bbox_padding` (`float` or `tuple`): expands bounding boxes, CSS style; a single number applies to all sides, a 4-tuple is (top, right, bottom, left), each a fraction of the box height (top/bottom) or width (left/right) in [0.0, 1.0]. None by default.
 - `draw_bboxes` (`bool`): whether to draw bounding boxes on the overlay.
 - `draw_low_confidence_points` (`bool`): whether to show low-confidence keypoint marks on the overlay.
@@ -101,10 +101,10 @@ The brick recognizes four poses by default:
 
 ## Teaching your own poses
 
-You can teach the brick to recognize custom poses by providing training photos. A custom pose is a folder of photos named like the pose (built-in pose names are not allowed) inside the `poses` folder at the root of your app. That folder is the default `custom_poses_dir`, usually `/app/poses` for the running app:
+You can teach the brick to recognize custom poses by providing training photos. A custom pose is a folder of photos named like the pose (built-in pose names are not allowed) inside the `poses` folder at the root of your app. That folder is the default `custom_poses_dir`:
 
 ```
-poses/                           # in your app's root folder; /app/poses for the running app
+poses/                           # in your app's root folder
   hands_on_hips/                 # the pose: IMG_0001.jpg, IMG_0002.jpg, ... (jpg or png, one person, whole body in the frame)
     report_<date>_<time>.txt     # written by the brick at every start that changes something
   other/                         # optional: photos of what is NOT any of your poses

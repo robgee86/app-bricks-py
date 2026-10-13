@@ -73,7 +73,7 @@ class WebSocketCamera(BaseCamera):
             port (int): Port to bind the server to
             timeout (int): Connection timeout in seconds
             certs_dir_path (str | None): Path to the directory containing TLS certificates.
-                Defaults to the certs folder of the app, usually "/app/certs".
+                Defaults to the certs folder of the app.
             use_tls (bool): Enable TLS for secure connections. If True, 'encrypt' will
                 be ignored. Use this for transport-level security with clients that can
                 accept self-signed certificates or when supplying your own certificates.

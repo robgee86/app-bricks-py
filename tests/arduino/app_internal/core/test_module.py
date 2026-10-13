@@ -21,4 +21,5 @@ def test_the_app_config_falls_back_to_the_folder_of_the_main_script(monkeypatch,
     main.__file__ = str(tmp_path / "python" / "main.py")
     monkeypatch.setitem(sys.modules, "__main__", main)
     monkeypatch.setenv("APP_HOME", str(tmp_path / "missing"))
+    monkeypatch.chdir(tmp_path / "python")
     assert get_app_config() == {"name": "next to main"}
