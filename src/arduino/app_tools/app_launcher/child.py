@@ -30,14 +30,14 @@ class Launch:
     app: str
     env: Mapping[str, str]
     """The supervisor environment with the requested one on top."""
-    http_port: int
-    """The port the app binds, which the launcher forwards the public one to."""
+    ports: Mapping[int, int]
+    """The internal port the app binds for each public port the launcher forwards."""
     output_fd: int
     runner: Runner = Runner.PYTHON
     interpreter: str | None = None
     """The app venv interpreter, set only when the app has dependencies of its own."""
-    public_port: int = 7000
-    """The port users reach the app on, shown in the URLs the app prints."""
+    streamlit_port: int | None = None
+    """The public port Streamlit serves, shown in the URLs it prints; None leaves Streamlit its default."""
 
     @property
     def main_py(self) -> str:
@@ -47,21 +47,25 @@ class Launch:
     def exec_argv(self) -> list[str] | None:
         """The command the child execs, None when it runs main.py warm in this process."""
         if self.runner is Runner.STREAMLIT:
-            python = self.interpreter or sys.executable
-            return [
-                python,
-                "-m",
-                "streamlit",
-                "run",
-                "--server.port",
-                str(self.http_port),
-                "--browser.serverPort",
-                str(self.public_port),
-                self.main_py,
-            ]
+            return [self.interpreter or sys.executable, "-m", "streamlit", "run", *self._streamlit_port_options, self.main_py]
         if self.interpreter:
             return [self.interpreter, self.main_py]
         return None
+
+    @property
+    def _streamlit_port_options(self) -> list[str]:
+        # Streamlit binds the internal port of its public one, or the public one itself when it is not forwarded
+        if self.streamlit_port is None:
+            return []
+        internal = self.ports.get(self.streamlit_port)
+        if internal is None:
+            return ["--server.port", str(self.streamlit_port)]
+        return ["--server.port", str(internal), "--browser.serverPort", str(self.streamlit_port)]
+
+
+def port_variable(public: int) -> str:
+    """Names the variable telling the app the internal port to bind for a public one."""
+    return f"ARDUINO_APP_PORT_{public}"
 
 
 def runner(app: str) -> Runner:
@@ -85,8 +89,8 @@ def _venv_has_packages(app: str) -> bool:
 
 
 def environment(launch: Launch) -> dict[str, str]:
-    """Builds the app environment: the launch one, the HTTP port and the run.sh additions."""
-    env = {**launch.env, "ARDUINO_APP_HTTP_PORT": str(launch.http_port), "PYTHONUNBUFFERED": "1"}
+    """Builds the app environment: the launch one, an ARDUINO_APP_PORT_<public> per forwarded port and the run.sh additions."""
+    env = {**launch.env, **{port_variable(public): str(internal) for public, internal in launch.ports.items()}, "PYTHONUNBUFFERED": "1"}
     bricks = os.path.join(launch.app, "bricks")
     if os.path.isdir(bricks):
         env["PYTHONPATH"] = os.pathsep.join(filter(None, [env.get("PYTHONPATH"), bricks]))

@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse
 from fastapi_socketio import SocketManager
 
 from arduino.app_utils import brick, Logger
+from arduino.app_utils.apphome import app_path
 
 if TYPE_CHECKING:
     # Type hint only: importing the camera package at runtime would load cv2 in every app using WebUI
@@ -34,17 +35,12 @@ never completes on its own. The app's shutdown is time-boxed, so the wait has to
 FORCE_SHUTDOWN_TIMEOUT_S = 2.5
 """How long to wait, after asking the server to stop, before forcing it to drop connections."""
 
-DEFAULT_PORT = 7000
-"""The public port of the app, the only one the launcher forwards."""
-
-HTTP_PORT_ENV = "ARDUINO_APP_HTTP_PORT"
-"""Environment variable overriding the bind port of the default port, while the URLs keep showing it."""
-
 
 def _bind_port(port: int) -> int:
-    """Return the port to bind for the given public port, honouring HTTP_PORT_ENV for DEFAULT_PORT only."""
-    value = os.getenv(HTTP_PORT_ENV)
-    if port != DEFAULT_PORT or not value:
+    """Return the port to bind for the public one: ARDUINO_APP_PORT_<port> when set to a valid port, else the public one."""
+    name = f"ARDUINO_APP_PORT_{port}"
+    value = os.getenv(name)
+    if not value:
         return port
     try:
         bind_port = int(value)
@@ -52,7 +48,7 @@ def _bind_port(port: int) -> int:
             return bind_port
     except ValueError:
         pass
-    logger.warning(f"Ignoring {HTTP_PORT_ENV}={value!r}: expected an integer between 1 and 65535")
+    logger.warning(f"Ignoring {name}={value!r}: expected an integer between 1 and 65535")
     return port
 
 
@@ -68,11 +64,11 @@ class WebUI:
     def __init__(
         self,
         addr: str = "0.0.0.0",
-        port: int = DEFAULT_PORT,
+        port: int = 7000,
         ui_path_prefix: str = "",
         api_path_prefix: str = "",
-        assets_dir_path: str = "/app/assets",
-        certs_dir_path: str = "/app/certs",
+        assets_dir_path: str | None = None,
+        certs_dir_path: str | None = None,
         use_tls: bool = False,
         use_ssl: bool | None = None,  # Deprecated alias for use_tls
         cors_origins: str = "*",
@@ -82,11 +78,11 @@ class WebUI:
         Args:
             addr (str, optional): Server bind address. Defaults to "0.0.0.0" (all interfaces).
             port (int, optional): Server port number, also used in the URLs. Defaults to 7000.
-                For port 7000, the ARDUINO_APP_HTTP_PORT environment variable, when set, overrides the bind port only.
+                The ARDUINO_APP_PORT_<port> environment variable, when set, overrides the bind port only.
             ui_path_prefix (str, optional): URL prefix for UI routes. Defaults to "" (root).
             api_path_prefix (str, optional): URL prefix for API routes. Defaults to "" (root).
-            assets_dir_path (str, optional): Path to static assets directory. Defaults to "/app/assets".
-            certs_dir_path (str, optional): Path to TLS certificates directory. Defaults to "/app/certs".
+            assets_dir_path (str, optional): Path to static assets directory. Defaults to the "assets" folder of the app, usually "/app/assets".
+            certs_dir_path (str, optional): Path to TLS certificates directory. Defaults to the "certs" folder of the app, usually "/app/certs".
             use_tls (bool, optional): Enable TLS/HTTPS. Defaults to False.
             use_ssl (bool, optional): Deprecated. Use use_tls instead. Defaults to None.
             cors_origins (str, optional): CORS allowed origins. Can be "*" for all origins, a
@@ -130,8 +126,8 @@ class WebUI:
         self._bind_port = _bind_port(self._port)
         self._ui_path_prefix = ui_path_prefix
         self._api_path_prefix = api_path_prefix
-        self._assets_dir_path = os.path.abspath(assets_dir_path)
-        self._certs_dir_path = os.path.abspath(certs_dir_path)
+        self._assets_dir_path = os.path.abspath(app_path("assets") if assets_dir_path is None else assets_dir_path)
+        self._certs_dir_path = os.path.abspath(app_path("certs") if certs_dir_path is None else certs_dir_path)
         self._use_tls = use_tls
         self._protocol = "https" if self._use_tls else "http"
         self._server: uvicorn.Server | None = None
