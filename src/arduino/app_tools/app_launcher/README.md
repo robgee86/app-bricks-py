@@ -34,7 +34,7 @@ Errors are `{"ok":false,"error":{"code":..,"message":..}}` with `code` one of `b
 
 | Variable | Default | |
 |---|---|---|
-| `APP_LAUNCHER_PRELOAD` | `arduino.app_utils,arduino.app_peripherals.camera,arduino.app_peripherals.microphone,arduino.app_bricks.web_ui` | Modules imported at startup, one by one; a failing one is logged and reported by `status` |
+| `APP_LAUNCHER_PRELOAD` | `arduino.app_utils,arduino.app_peripherals.camera,arduino.app_peripherals.microphone,arduino.app_peripherals.speaker,arduino.app_bricks.web_ui` | Modules imported at startup, one by one; a failing one is logged and reported by `status` |
 | `APP_LAUNCHER_SOCKET` | `/run/arduino-app-cli/app-launcher.sock` | Control socket; a stale one is replaced |
 | `APP_LAUNCHER_STOP_TIMEOUT_S` | `5` | Grace period between SIGTERM and SIGKILL, the CLI's container stop timeout |
 | `APP_LAUNCHER_RUN_SH` | `/run.sh` | The entrypoint whose `prepare` mode installs the app dependencies |

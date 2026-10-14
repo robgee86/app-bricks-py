@@ -38,7 +38,14 @@ from .protocol import ErrorCode, LauncherError, Mode, Ping, Request, Start, Stat
 
 logger = logging.getLogger("arduino.app_tools.app_launcher")
 
-DEFAULT_PRELOAD = "arduino.app_utils,arduino.app_peripherals.camera,arduino.app_peripherals.microphone,arduino.app_bricks.web_ui"
+# The peripherals import their backends eagerly: each package brings its dependencies into the warm interpreter
+DEFAULT_PRELOAD = ",".join((
+    "arduino.app_utils",
+    "arduino.app_peripherals.camera",
+    "arduino.app_peripherals.microphone",
+    "arduino.app_peripherals.speaker",
+    "arduino.app_bricks.web_ui",
+))
 DEFAULT_RUN_SH = "/run.sh"
 PORT_OFFSET = 10000
 STREAMLIT_UI_PACKAGE = "arduino.app_bricks.streamlit_ui"
