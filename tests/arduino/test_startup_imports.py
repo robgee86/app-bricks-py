@@ -27,6 +27,8 @@ class StartupImports:
     packages: frozenset[str]
     """Third-party packages that library code imports itself while the entry point loads."""
     max_modules: int
+    needs: frozenset[str] = frozenset()
+    """Modules the entry point itself needs and that only the image ships, such as the ALSA binding."""
     """Modules loaded in all, stdlib and dependencies included, with some headroom over today's count.
 
     Unlike the packages, the count depends on the environment: what the dependencies import optionally is not the same
@@ -37,26 +39,39 @@ class StartupImports:
 STARTUP_IMPORTS = {
     # Every app
     "from arduino.app_utils import *": StartupImports(frozenset({"arduino.router_bridge", "watchdog"}), max_modules=110),
-    # Apps with a camera: each backend loads its own dependencies (cv2, websockets, ...) when Camera() picks it
-    "import arduino.app_peripherals.camera": StartupImports(frozenset({"arduino.router_bridge", "numpy", "watchdog"}), max_modules=215),
+    # Apps with a camera: the package brings its backends, OpenCV and the WebSocket stack included, so that the app
+    # launcher's warm interpreter holds them for every app forked from it
+    "import arduino.app_peripherals.camera": StartupImports(
+        frozenset({"arduino.router_bridge", "cryptography", "cv2", "numpy", "watchdog", "websockets"}), max_modules=420
+    ),
     # Apps with a web interface
     "import arduino.app_bricks.web_ui": StartupImports(
         frozenset({"arduino.router_bridge", "fastapi", "fastapi_socketio", "uvicorn", "watchdog"}), max_modules=770
     ),
     # Every AI brick: the Edge Impulse facade loads its HTTP client, PIL and OpenCV when an inference needs them
     "import arduino.app_internal.core": StartupImports(frozenset({"arduino.router_bridge", "watchdog"}), max_modules=110),
-    # Apps with a microphone: each backend loads its own dependencies (websockets, asyncio, ...) when Microphone() picks it
+    # Apps with a microphone: the package brings its backends too, the ALSA binding ships in the image only
     "from arduino.app_peripherals.microphone import Microphone": StartupImports(
-        frozenset({"arduino.router_bridge", "numpy", "watchdog"}), max_modules=220
+        frozenset({"alsaaudio", "arduino.router_bridge", "cryptography", "numpy", "watchdog", "websockets"}),
+        max_modules=360,
+        needs=frozenset({"alsaaudio"}),
     ),
     # An image brick: PIL for its images, without OpenCV, which only the image adjustments need
     "import arduino.app_bricks.object_detection": StartupImports(frozenset({"arduino.router_bridge", "PIL", "watchdog"}), max_modules=165),
     # Cloud API bricks: the HTTP client loads with the first request
     "import arduino.app_bricks.air_quality_monitoring": StartupImports(frozenset({"arduino.router_bridge", "watchdog"}), max_modules=110),
     "import arduino.app_bricks.weather_forecast": StartupImports(frozenset({"arduino.router_bridge", "watchdog"}), max_modules=110),
-    # Audio bricks: the microphone needs numpy; the ASR needs websockets (with asyncio and ssl) as soon as it starts
-    "import arduino.app_bricks.audio_classification": StartupImports(frozenset({"arduino.router_bridge", "numpy", "watchdog"}), max_modules=225),
-    "import arduino.app_bricks.asr": StartupImports(frozenset({"arduino.router_bridge", "numpy", "watchdog", "websockets"}), max_modules=345),
+    # Audio bricks: they bring the microphone package with its backends
+    "import arduino.app_bricks.audio_classification": StartupImports(
+        frozenset({"alsaaudio", "arduino.router_bridge", "cryptography", "numpy", "watchdog", "websockets"}),
+        max_modules=380,
+        needs=frozenset({"alsaaudio"}),
+    ),
+    "import arduino.app_bricks.asr": StartupImports(
+        frozenset({"alsaaudio", "arduino.router_bridge", "cryptography", "numpy", "watchdog", "websockets"}),
+        max_modules=400,
+        needs=frozenset({"alsaaudio"}),
+    ),
 }
 
 # Runs the entry point in a fresh interpreter and prints, as JSON, the third-party packages that library code
@@ -94,6 +109,11 @@ print(json.dumps({"packages": {p: by for p, by in imported_by.items() if p in sy
 
 def _probe(entry_point: str) -> tuple[dict[str, str], int]:
     result = subprocess.run([sys.executable, "-c", _PROBE, entry_point], capture_output=True, text=True, timeout=120)
+    if result.returncode != 0:
+        # The test process has the hardware bindings mocked: only the fresh interpreter tells they are missing
+        for module in sorted(STARTUP_IMPORTS[entry_point].needs):
+            if f"No module named '{module}'" in result.stderr:
+                pytest.skip(f"{module} ships in the image only")
     assert result.returncode == 0, result.stderr
     out = json.loads(result.stdout.strip().splitlines()[-1])
     return out["packages"], out["modules"]
