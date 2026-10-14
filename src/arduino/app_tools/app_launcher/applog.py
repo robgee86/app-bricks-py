@@ -12,17 +12,23 @@ CHUNK_BYTES = 64 * 1024
 class AppLog:
     """Appends an app's raw output to a file, rotated by size into a single previous file, like Docker's json-file driver."""
 
-    def __init__(self, path: str, max_bytes: int = MAX_BYTES) -> None:
-        """Opens the log for appending, creating its folder.
+    def __init__(self, path: str, max_bytes: int = MAX_BYTES, fresh: bool = False) -> None:
+        """Opens the log, creating its folder.
 
         Args:
             path (str): The log file, `app.log`; the rotated one is `app.log.1`.
             max_bytes (int): The size past which the log is rotated before the next write.
+            fresh (bool): Start over: the previous content and the rotated file go, so the log holds one run.
         """
         os.makedirs(os.path.dirname(path), exist_ok=True)
         self.path = path
         self._max_bytes = max_bytes
-        self._file = open(path, "ab", buffering=0)  # noqa: SIM115
+        if fresh:
+            try:
+                os.remove(f"{path}.1")
+            except FileNotFoundError:
+                pass
+        self._file = open(path, "wb" if fresh else "ab", buffering=0)  # noqa: SIM115
         self._size = self._file.tell()
 
     def write(self, data: bytes) -> None:

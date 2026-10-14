@@ -66,7 +66,7 @@ The launcher installs the app dependencies before forking, only when they change
 
 The preparation is `run.sh prepare` with `APP_DIR=<app>` and the app environment, in its own process group, its output appended to the app log. It creates the venv, installs the requirements, the wheels and Streamlit, checks the sources compile, and skips the device provisioning the serve mode already did. `start` reports `"prepared":true` and the time in `timings.prepare_ms`; a failure is a `prepare_failed` error and records nothing, so the next start tries again. A `stop` of that app or a shutdown sends SIGTERM to the preparation, the timeout SIGKILL.
 
-The output of each app goes to `<app>/.cache/logs/app.log`, rotated at 5 MB into a single `app.log.1`. The supervisor's own lines go to its stdout, the container log.
+The output of each app goes to `<app>/.cache/logs/app.log`, rotated at 5 MB into a single `app.log.1`; every start begins a new log, so it holds the current run only. The supervisor's own lines go to its stdout, the container log.
 
 ## Fork rules
 

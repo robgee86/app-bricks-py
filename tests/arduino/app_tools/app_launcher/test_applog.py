@@ -32,3 +32,18 @@ def test_rotates_into_a_single_previous_file(tmp_path):
     log.close()
     assert (read(path), read(tmp_path / "app.log.1")) == (b"dddddddddddd", b"cc")
     assert sorted(p.name for p in tmp_path.iterdir()) == ["app.log", "app.log.1"]
+
+
+def test_a_fresh_log_holds_one_run(tmp_path):
+    path = tmp_path / "logs" / "app.log"
+    previous = AppLog(str(path), max_bytes=8)
+    previous.write(b"old run\n")
+    previous.write(b"rotates\n")  # The first write goes to app.log.1
+    previous.close()
+    assert (tmp_path / "logs" / "app.log.1").exists()
+
+    log = AppLog(str(path), fresh=True)
+    log.write(b"new run\n")
+    log.close()
+    assert path.read_bytes() == b"new run\n"
+    assert not (tmp_path / "logs" / "app.log.1").exists()
