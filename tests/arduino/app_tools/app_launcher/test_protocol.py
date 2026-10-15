@@ -12,12 +12,6 @@ from arduino.app_tools.app_launcher.protocol import ErrorCode, LauncherError, Mo
 def test_decodes_every_request():
     assert decode_request(b'{"cmd":"start","app":"/apps/a/","env":{"K":"V"},"mode":"replace"}\n') == Start(app="/apps/a", env={"K": "V"})
     assert decode_request(b'{"cmd":"start","app":"/apps/a","mode":"add"}') == Start(app="/apps/a", mode=Mode.ADD)
-    assert decode_request(b'{"cmd":"start","app":"/apps/a","ports":[8080,7000,8080]}') == Start(app="/apps/a", ports=(8080, 7000))
-    assert (
-        decode_request(b'{"cmd":"start","app":"/apps/a","ports":[]}')
-        == decode_request(b'{"cmd":"start","app":"/apps/a","ports":null}')
-        == Start(app="/apps/a")
-    )
     assert decode_request(b'{"cmd":"stop"}') == Stop()
     assert decode_request(b'{"cmd":"stop","app":"/apps/a"}') == Stop(app="/apps/a")
     assert decode_request(b'{"cmd":"status"}') == Status()
@@ -37,11 +31,6 @@ def test_decodes_every_request():
         b'{"cmd":"start","app":"/apps/a","env":{"K":1}}',
         b'{"cmd":"start","app":"/apps/a","env":["K"]}',
         b'{"cmd":"start","app":"/apps/a","mode":"sideways"}',
-        b'{"cmd":"start","app":"/apps/a","ports":7000}',
-        b'{"cmd":"start","app":"/apps/a","ports":["7000"]}',
-        b'{"cmd":"start","app":"/apps/a","ports":[true]}',
-        b'{"cmd":"start","app":"/apps/a","ports":[0]}',
-        b'{"cmd":"start","app":"/apps/a","ports":[65536]}',
         b'{"cmd":"stop","app":42}',
     ],
 )

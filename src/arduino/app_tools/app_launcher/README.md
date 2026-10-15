@@ -21,14 +21,14 @@ A Unix socket at `APP_LAUNCHER_SOCKET`, mode 0660. One JSON object per line, one
 
 | Request | Response |
 |---|---|
-| `{"cmd":"start","app":"<abs folder>","env":{...},"mode":"replace","ports":[7000]}` | `{"ok":true,"pid":N,"started_at":"<iso>","warm":true,"runner":"python","ports":{"7000":17000},"prepared":false,"timings":{"stop_ms":..,"prepare_ms":..,"fork_ms":..}}` |
+| `{"cmd":"start","app":"<abs folder>","env":{...},"mode":"replace"}` | `{"ok":true,"pid":N,"started_at":"<iso>","warm":true,"runner":"python","prepared":false,"timings":{"stop_ms":..,"prepare_ms":..,"fork_ms":..}}` |
 | `{"cmd":"stop"}` or `{"cmd":"stop","app":"<abs folder>"}` | `{"ok":true,"stopped":[{"app":..,"pid":..,"exit_code":..,"signal":..}]}` |
-| `{"cmd":"status"}` | `{"ok":true,"children":[{"app","pid","state","started_at","ports","runner","warm"}],"preload":{"modules":[..],"failed":[..]},"version":..,"uptime_s":..}` |
+| `{"cmd":"status"}` | `{"ok":true,"children":[{"app","pid","state","started_at","runner","warm"}],"preload":{"modules":[..],"failed":[..]},"version":..,"uptime_s":..}` |
 | `{"cmd":"ping"}` | `{"ok":true}` |
 
-`ports` lists the public ports of the app, none when absent or empty, see [Ports](#ports). `start` with `replace` stops every running app first, prepares the new one when needed, then forks it. `mode` `add` is refused with `unsupported`: one app at a time for now. Stopping an app that is not running is not an error. A stop sends SIGTERM, waits the grace period, then SIGKILLs the app's process group; whatever the app leaves in its group is killed once it exits, as in a container whose main process ends.
+`start` with `replace` stops every running app first, prepares the new one when needed, then forks it. `mode` `add` is refused with `unsupported`: one app at a time for now. Stopping an app that is not running is not an error. A stop sends SIGTERM, waits the grace period, then SIGKILLs the app's process group; whatever the app leaves in its group is killed once it exits, as in a container whose main process ends.
 
-Errors are `{"ok":false,"error":{"code":..,"message":..}}` with `code` one of `bad_request` (malformed request, relative app path, a public port without an internal one), `not_found` (no app folder or no `python/main.py`), `unsupported` (`mode` `add`), `busy` (the launcher is shutting down), `prepare_failed` (`run.sh prepare` failed, was stopped or timed out, with the last lines of its output), `internal` (fork refused or failed, unexpected errors).
+Errors are `{"ok":false,"error":{"code":..,"message":..}}` with `code` one of `bad_request` (malformed request, relative app path), `not_found` (no app folder or no `python/main.py`), `unsupported` (`mode` `add`), `busy` (the launcher is shutting down), `prepare_failed` (`run.sh prepare` failed, was stopped or timed out, with the last lines of its output), `internal` (fork refused or failed, unexpected errors).
 
 ## Environment
 
@@ -42,7 +42,7 @@ Errors are `{"ok":false,"error":{"code":..,"message":..}}` with `code` one of `b
 
 ## Ports
 
-The launcher publishes no port: the CLI's ingress on the host network does. Each public port `P` in the `start` request maps to the internal port `P + 10000`, and the app gets `ARDUINO_APP_PORT_<P>=<internal port>` in its environment. A brick serving `P` binds the internal port when the variable is set and `P` otherwise, while the URLs it shows keep `P`. `start` and `status` report the mapping as `ports`, `{"<public>": <internal>}`, with the public ports as string keys as JSON requires.
+The launcher publishes no port: the CLI's ingress does, forwarding each public port of the app to the same port in the launcher's container. The app binds its ports as it would in a container of its own.
 
 ## The app child
 
@@ -51,14 +51,14 @@ Before any app code runs, the child:
 1. becomes a session and process group leader;
 2. points every inherited fd above 2 at `/dev/null` and its stdout and stderr at the log pipe;
 3. gets back the signal dispositions the supervisor had after the preload, which are those of a fresh `python main.py`;
-4. gets the supervisor's environment with the request's `env` on top, then an `ARDUINO_APP_PORT_<P>` per port of the app and `PYTHONUNBUFFERED=1`, and `<app>/bricks` on `PYTHONPATH` when it exists;
+4. gets the supervisor's environment with the request's `env` on top, then `PYTHONUNBUFFERED=1`, and `<app>/bricks` on `PYTHONPATH` when it exists;
 5. moves to the app folder, sets `sys.argv` and `sys.path` as a fresh interpreter would;
 6. runs `python/main.py` as a permanent `__main__` module: a fresh module with the dunders of a script, not `runpy`, so the app's threads and atexit handlers keep seeing it. Uncaught exceptions go through `sys.excepthook` without the launcher frames, with exit code 1; `SystemExit` is honoured and the interpreter exits normally.
 
 Two kinds of apps are not run warm: the child execs instead, with the same environment, cwd and process group, and `start` reports `"warm":false`.
 
 - An app with dependencies of its own, as the preparation defines them, or whose venv `<app>/.cache/.venv` holds a `*.dist-info` or a `*.pth` other than the `_virtualenv.pth` of an empty `uv venv`. The child execs the venv interpreter on `main.py`, with `VIRTUAL_ENV` set and its `bin` first on `PATH`.
-- A Streamlit app, whose `app.yaml` mentions `arduino:streamlit_ui` as run.sh checks: the child execs `<venv python> -m streamlit run --server.port <internal port> --browser.serverPort <public port> <app>/python/main.py`, since the preparation installs Streamlit in the venv. The public port is the first one the streamlit_ui brick declares in its `brick_config.yaml`, read from the installed library without importing the brick, or the smallest port of the app when that file cannot be read; when the app does not list it, Streamlit binds it directly. `start` reports `"runner":"streamlit"`.
+- A Streamlit app, whose `app.yaml` mentions `arduino:streamlit_ui` as run.sh checks: the child execs `<venv python> -m streamlit run --server.port 7000 <app>/python/main.py`, the port run.sh always gave Streamlit, since the preparation installs Streamlit in the venv. `start` reports `"runner":"streamlit"`.
 
 ## Preparation
 
