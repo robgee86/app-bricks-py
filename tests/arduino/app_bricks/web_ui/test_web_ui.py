@@ -383,55 +383,7 @@ def test_stop_without_a_server_is_a_noop():
     assert ui._server is None
 
 
-@pytest.mark.parametrize("value", [None, ""])
-def test_server_binds_to_its_port_without_a_port_from_the_environment(monkeypatch, value):
-    if value is None:
-        monkeypatch.delenv("ARDUINO_APP_PORT_7000", raising=False)
-    else:
-        monkeypatch.setenv("ARDUINO_APP_PORT_7000", value)
-    ui = WebUI()
-    ui.start()
-
-    assert ui._server is not None
-    assert ui._server.config.port == 7000
-
-
-@pytest.mark.parametrize("port", [7000, 8080])
-def test_server_binds_to_the_port_the_environment_names_for_its_port(monkeypatch, port):
-    monkeypatch.setenv(f"ARDUINO_APP_PORT_{port}", "17001")
-    ui = WebUI(port=port)
-    ui.start()
-
-    assert ui._server is not None
-    assert ui._server.config.port == 17001
-    assert ui.local_url == f"http://localhost:{port}"
-
-
-def test_server_ignores_the_port_the_environment_names_for_another_port(monkeypatch):
-    monkeypatch.setenv("ARDUINO_APP_PORT_7000", "17000")
-    monkeypatch.delenv("ARDUINO_APP_PORT_8080", raising=False)
-    ui = WebUI(port=8080)
-    ui.start()
-
-    assert ui._server is not None
-    assert ui._server.config.port == 8080
-
-
-@pytest.mark.parametrize("value", ["abc", "0", "65536", "-1"])
-def test_invalid_port_from_the_environment_is_ignored(monkeypatch, value):
-    monkeypatch.setenv("ARDUINO_APP_PORT_7000", value)
-    with patch.object(web_ui.logger, "warning") as warning:
-        ui = WebUI()
-    ui.start()
-
-    assert ui._server is not None
-    assert ui._server.config.port == 7000
-    warning.assert_called_once()
-    assert "ARDUINO_APP_PORT_7000" in warning.call_args.args[0]
-
-
 def test_logged_urls_show_the_public_port(monkeypatch):
-    monkeypatch.setenv("ARDUINO_APP_PORT_7000", "7001")
     monkeypatch.setenv("HOST_IP", "192.168.1.10")
     ui = WebUI()
     ui._server = Mock()

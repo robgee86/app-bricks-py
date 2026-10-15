@@ -13,18 +13,14 @@ import time
 from pathlib import Path
 
 import pytest
-import yaml
 
 from arduino.app_tools.app_launcher import client
-
-STREAMLIT_UI_CONFIG = Path(__file__).parents[4] / "src" / "arduino" / "app_bricks" / "streamlit_ui" / "brick_config.yaml"
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="the launcher forks, POSIX only")
 
 FAKE_MAIN = """
 import os, signal, sys
-ports = sorted(f"{name}={value}" for name, value in os.environ.items() if name.startswith("ARDUINO_APP_PORT_"))
-print("hello from", __name__, sys.argv[0], *ports, os.environ["GREETING"], os.environ["INHERITED"], flush=True)
+print("hello from", __name__, sys.argv[0], os.environ["GREETING"], os.environ["INHERITED"], flush=True)
 signal.pause()
 """
 
@@ -145,17 +141,16 @@ def log_of(app, until=""):
 
 def test_runs_an_app_until_stopped(launcher):
     app = launcher.app("hello")
-    started = launcher.request({"cmd": "start", "app": str(app), "env": {"GREETING": "hi"}, "mode": "replace", "ports": [8080, 7000]})
+    started = launcher.request({"cmd": "start", "app": str(app), "env": {"GREETING": "hi"}, "mode": "replace"})
     assert started["ok"] and started["warm"] and started["runner"] == "python" and not started["prepared"]
-    assert started["ports"] == {"8080": 18080, "7000": 17000}
     assert set(started["timings"]) == {"stop_ms", "prepare_ms", "fork_ms"}
 
     status = launcher.request({"cmd": "status"})
     child = {"app": str(app), "pid": started["pid"], "state": "running", "started_at": started["started_at"], "runner": "python", "warm": True}
-    assert status["children"] == [{**child, "ports": {"8080": 18080, "7000": 17000}}]
+    assert status["children"] == [child]
     assert status["preload"] == {"modules": ["json"], "failed": []}
 
-    assert log_of(app) == f"hello from __main__ {app}/python/main.py ARDUINO_APP_PORT_7000=17000 ARDUINO_APP_PORT_8080=18080 hi yes\n"
+    assert log_of(app) == f"hello from __main__ {app}/python/main.py hi yes\n"
 
     stopped = launcher.request({"cmd": "stop", "app": str(app)})
     assert stopped == {"ok": True, "stopped": [{"app": str(app), "pid": started["pid"], "exit_code": None, "signal": signal.SIGTERM}]}
@@ -179,30 +174,13 @@ def test_replace_stops_the_running_app_first(launcher):
     assert launcher.request({"cmd": "stop"})["stopped"][0]["pid"] == second["pid"]
 
 
-def test_runs_streamlit_apps_through_streamlit_on_the_port_the_brick_declares(launcher):
-    declared = yaml.safe_load(STREAMLIT_UI_CONFIG.read_text())["ports"][0]
+def test_runs_streamlit_apps_through_streamlit_on_port_7000(launcher):
     app = launcher.app("dashboard", app_yaml="bricks:\n  - arduino:streamlit_ui: {}\n")
-    started = launcher.request({"cmd": "start", "app": str(app), "ports": [declared]})
+    started = launcher.request({"cmd": "start", "app": str(app)})
     assert (started["warm"], started["runner"], started["prepared"]) == (False, "streamlit", True)
-    streamlit = f"streamlit run --server.port {declared + 10000} --browser.serverPort {declared} {app}/python/main.py {app}\n"
+    streamlit = f"streamlit run --server.port 7000 {app}/python/main.py {app}\n"
     assert log_of(app, until=streamlit).endswith(streamlit)
     assert launcher.request({"cmd": "stop"})["stopped"][0]["signal"] == signal.SIGTERM
-
-
-def test_streamlit_binds_the_declared_port_directly_when_the_app_does_not_list_it(launcher):
-    declared = yaml.safe_load(STREAMLIT_UI_CONFIG.read_text())["ports"][0]
-    app = launcher.app("unlisted", app_yaml="bricks:\n  - arduino:streamlit_ui: {}\n")
-    assert launcher.request({"cmd": "start", "app": str(app)})["ports"] == {}
-    streamlit = f"streamlit run --server.port {declared} {app}/python/main.py {app}\n"
-    assert log_of(app, until=streamlit).endswith(streamlit)
-    launcher.request({"cmd": "stop"})
-
-
-def test_an_app_without_ports_gets_no_port_variable(launcher):
-    app = launcher.app("portless")
-    assert launcher.request({"cmd": "start", "app": str(app)})["ports"] == {}
-    assert log_of(app) == f"hello from __main__ {app}/python/main.py from the launcher yes\n"
-    launcher.request({"cmd": "stop"})
 
 
 def test_prepares_an_app_with_dependencies_when_they_change(launcher):
@@ -243,17 +221,11 @@ def test_refuses_what_is_not_an_app(launcher):
     assert launcher.request({"cmd": "start", "app": str(launcher.root / "empty")})["error"]["code"] == "not_found"
 
 
-def test_refuses_a_public_port_without_an_internal_one(launcher):
-    refused = launcher.request({"cmd": "start", "app": str(launcher.app("unmappable")), "ports": [7000, 60000]})
-    assert refused["error"] == {"code": "bad_request", "message": "no internal port for the public ports [60000]"}
-    assert launcher.request({"cmd": "status"})["children"] == []
-
-
 def test_the_client_prints_the_response(launcher, capsys):
     app = launcher.app("client")
-    assert client.main(["--socket", launcher.socket, "start", str(app), "--env", "GREETING=a=b", "--port", "7000"]) == 0
+    assert client.main(["--socket", launcher.socket, "start", str(app), "--env", "GREETING=a=b"]) == 0
     pid = json.loads(capsys.readouterr().out)["pid"]
-    assert log_of(app).endswith(" ARDUINO_APP_PORT_7000=17000 a=b yes\n")
+    assert log_of(app).endswith(" a=b yes\n")
     assert client.main(["--socket", launcher.socket, "status"]) == 0
     assert [child["pid"] for child in json.loads(capsys.readouterr().out)["children"]] == [pid]
     assert client.main(["--socket", launcher.socket, "start", str(launcher.root / "missing")]) == 1
