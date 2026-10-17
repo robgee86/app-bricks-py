@@ -4,7 +4,6 @@
 
 import os
 import re
-import sys
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -25,18 +24,9 @@ def _read_yaml(path: str) -> Any:  # noqa: ANN401
 
 
 def get_app_config() -> dict[str, Any] | None:
-    """Gets app.yaml application configuration, from the app folder or else from the parent of the main script folder."""
+    """Gets the app.yaml application configuration of the app folder, None without one."""
     config_path = app_folder(application_config_file_name)
-    if not os.path.exists(config_path):
-        main_file = getattr(sys.modules["__main__"], "__file__", None)
-        if not main_file:
-            return None
-        app_root_dir = os.path.dirname(os.path.dirname(os.path.abspath(main_file)))
-        config_path = os.path.join(app_root_dir, application_config_file_name)
-        if not os.path.exists(config_path):
-            return None
-
-    return _read_yaml(config_path)
+    return _read_yaml(config_path) if os.path.exists(config_path) else None
 
 
 def get_brick_config(cls: type) -> dict[str, Any] | None:
