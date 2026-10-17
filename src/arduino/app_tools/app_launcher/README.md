@@ -39,6 +39,7 @@ Errors are `{"ok":false,"error":{"code":..,"message":..}}` with `code` one of `b
 | `APP_LAUNCHER_STOP_TIMEOUT_S` | `5` | Grace period between SIGTERM and SIGKILL, the CLI's container stop timeout |
 | `APP_LAUNCHER_RUN_SH` | `/run.sh` | The entrypoint whose `prepare` mode installs the app dependencies |
 | `APP_LAUNCHER_PREPARE_TIMEOUT_S` | `600` | How long a preparation may take before it is killed; the client waits this long plus a minute for a `start` |
+| `APP_LAUNCHER_APP_ALIAS` | `/app` | The alias of the running app, a link to the link the supervisor points at the app folder, see [The app folder](#the-app-folder) |
 
 ## Ports
 
@@ -77,4 +78,6 @@ The output of each app goes to `<app>/.cache/logs/app.log`, rotated at 5 MB into
 
 ## The app folder
 
-Apps run with their own folder, mounted at its host path, as working directory, and the CLI sets `APP_HOME` to it. The library finds the folder through `arduino.app_utils.app_folder()`: `APP_HOME` when it is an existing folder, else the working directory, which is also where a developer runs an app from locally. Library code resolves it when used, never at import: the supervisor preloads the library before any app folder is known.
+Apps run with their own folder, mounted at its host path, as working directory. The library finds the folder through `arduino.app_utils.app_folder()`: the nearest folder holding an `app.yaml` above the running script, else above the working directory, else the working directory itself, which is also where a developer runs an app from locally. No environment variable is involved. Library code resolves it when used, never at import: the supervisor preloads the library before any app folder is known.
+
+`/app` keeps naming the running app, for the apps and tools written against the folder the classic stack mounted there. In the image `/app` is a link to a second link, which the supervisor points at the app folder before each start: a restart of the same app finds it in place, a switch repoints it, and it goes away when no app runs any more, after a stop, when the last app exits on its own, and at startup. The supervisor finds the second link by reading `/app` (`APP_LAUNCHER_APP_ALIAS` names another alias outside the image); where the alias is not a link, nothing is managed. It is an alias only: the library never reads it, and files written through it land in the real folder.
