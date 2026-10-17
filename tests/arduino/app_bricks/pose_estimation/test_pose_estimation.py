@@ -714,7 +714,7 @@ def _fake_embedder(cloud: np.ndarray, bad: set[str] = frozenset(), calls: list |
 class TestCustomPoses:
     def test_the_default_folder_is_the_poses_folder_of_the_app(self, monkeypatch, tmp_path):
         _poses_dir(tmp_path, {"sitting": 3})
-        monkeypatch.setenv("APP_HOME", str(tmp_path))
+        monkeypatch.chdir(tmp_path)
         with pytest.raises(ValueError, match="rename it"):
             _construct(monkeypatch, poses=["standing"])
 

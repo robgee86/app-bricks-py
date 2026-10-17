@@ -33,7 +33,7 @@ def test_webui_init_defaults():
 
 
 def test_webui_default_folders_are_in_the_app_folder(monkeypatch, tmp_path):
-    monkeypatch.setenv("APP_HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
     ui = WebUI()
     assert ui._assets_dir_path == str(tmp_path / "assets")
     assert ui._certs_dir_path == str(tmp_path / "certs")
