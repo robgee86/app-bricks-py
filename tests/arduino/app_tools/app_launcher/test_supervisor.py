@@ -66,6 +66,9 @@ def spawn(root, preload="json"):
     run_sh = root / "run.sh"
     run_sh.write_text(FAKE_RUN_SH.format(python=sys.executable))
     run_sh.chmod(0o755)
+    # As in the image: the alias is a link to the link the launcher manages
+    if not (root / "app").is_symlink():
+        (root / "app").symlink_to(root / "current-app")
     env = {
         **os.environ,
         "PYTHONPATH": str(modules),
@@ -73,6 +76,7 @@ def spawn(root, preload="json"):
         "APP_LAUNCHER_SOCKET": str(root / "launcher.sock"),
         "APP_LAUNCHER_STOP_TIMEOUT_S": "1",
         "APP_LAUNCHER_RUN_SH": str(run_sh),
+        "APP_LAUNCHER_APP_ALIAS": str(root / "app"),
         "GREETING": "from the launcher",
         "INHERITED": "yes",
     }
@@ -86,6 +90,7 @@ class Launcher:
     def __init__(self, root: Path):
         self.root = root
         self.socket = str(root / "launcher.sock")
+        self.app_link = root / "current-app"
         self.process = spawn(root)
         wait_until(self.answers, details=lambda: (root / "launcher.log").read_text())
 
@@ -151,27 +156,46 @@ def test_runs_an_app_until_stopped(launcher):
     assert status["preload"] == {"modules": ["json"], "failed": []}
 
     assert log_of(app) == f"hello from __main__ {app}/python/main.py hi yes\n"
+    assert os.readlink(launcher.app_link) == str(app)
+    assert (launcher.root / "app" / "python" / "main.py").read_text() == FAKE_MAIN, "the alias reaches the app"
 
     stopped = launcher.request({"cmd": "stop", "app": str(app)})
     assert stopped == {"ok": True, "stopped": [{"app": str(app), "pid": started["pid"], "exit_code": None, "signal": signal.SIGTERM}]}
     assert gone(started["pid"])
     assert launcher.request({"cmd": "status"})["children"] == []
+    assert not launcher.app_link.is_symlink()
     assert launcher.request({"cmd": "stop", "app": str(app)}) == {"ok": True, "stopped": []}
 
 
 def test_replace_stops_the_running_app_first(launcher):
     app = launcher.app("again")
     first = launcher.request({"cmd": "start", "app": str(app), "mode": "replace"})
+    link = os.lstat(launcher.app_link)
     second = launcher.request({"cmd": "start", "app": str(app), "mode": "replace"})
     assert second["ok"] and second["pid"] != first["pid"]
     assert gone(first["pid"])
     assert [child["pid"] for child in launcher.request({"cmd": "status"})["children"]] == [second["pid"]]
+    assert os.lstat(launcher.app_link) == link, "a restart of the same app keeps the link in place"
+
+    other = launcher.app("other")
+    third = launcher.request({"cmd": "start", "app": str(other), "mode": "replace"})
+    assert third["ok"] and gone(second["pid"])
+    assert os.readlink(launcher.app_link) == str(other)
 
     refused = launcher.request({"cmd": "start", "app": str(app), "mode": "add"})
     assert refused["error"]["code"] == "unsupported"
-    assert [child["pid"] for child in launcher.request({"cmd": "status"})["children"]] == [second["pid"]]
+    assert [child["pid"] for child in launcher.request({"cmd": "status"})["children"]] == [third["pid"]]
 
-    assert launcher.request({"cmd": "stop"})["stopped"][0]["pid"] == second["pid"]
+    assert launcher.request({"cmd": "stop"})["stopped"][0]["pid"] == third["pid"]
+
+
+def test_the_alias_goes_away_when_the_last_app_dies_on_its_own(launcher):
+    app = launcher.app("crashing")
+    started = launcher.request({"cmd": "start", "app": str(app), "mode": "replace"})
+    assert os.readlink(launcher.app_link) == str(app)
+    os.kill(started["pid"], signal.SIGKILL)
+    assert wait_until(lambda: launcher.request({"cmd": "status"})["children"] == [])
+    assert wait_until(lambda: not launcher.app_link.is_symlink())
 
 
 def test_runs_streamlit_apps_through_streamlit_on_port_7000(launcher):

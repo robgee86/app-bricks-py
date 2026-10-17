@@ -44,6 +44,8 @@ DEFAULT_PRELOAD = ",".join((
     "arduino.app_bricks.web_ui",
 ))
 DEFAULT_RUN_SH = "/run.sh"
+DEFAULT_APP_ALIAS = "/app"
+"""The path that names the running app for compatibility: in the image, a link to the link the launcher points at the app."""
 REQUEST_TIMEOUT_S = 5.0
 HANDLED_SIGNALS = (signal.SIGTERM, signal.SIGINT, signal.SIGCHLD)
 
@@ -59,6 +61,8 @@ class Config:
     stop_timeout_s: float
     run_sh: str
     prepare_timeout_s: float
+    app_link: str | None
+    """The link behind the alias, pointed at the running app; None when the alias is not a link, as outside the image."""
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> "Config":
@@ -73,7 +77,15 @@ class Config:
             stop_timeout_s=float(env.get("APP_LAUNCHER_STOP_TIMEOUT_S", "5")),
             run_sh=env.get("APP_LAUNCHER_RUN_SH", DEFAULT_RUN_SH),
             prepare_timeout_s=float(env.get("APP_LAUNCHER_PREPARE_TIMEOUT_S", "600")),
+            app_link=_link_behind(env.get("APP_LAUNCHER_APP_ALIAS", DEFAULT_APP_ALIAS)),
         )
+
+
+def _link_behind(alias: str) -> str | None:
+    try:
+        return os.readlink(alias)
+    except OSError:
+        return None
 
 
 @dataclass(eq=False)
@@ -179,6 +191,7 @@ class Supervisor:
         return None
 
     async def _open(self) -> None:
+        self._unlink_app()
         self._control = await asyncio.start_unix_server(self._on_control, sock=self._bind_control_socket(), limit=protocol.MAX_LINE_BYTES)
 
     def _bind_control_socket(self) -> socket.socket:
@@ -222,6 +235,7 @@ class Supervisor:
     async def _exit(self) -> None:
         async with self._lifecycle:
             await self._stop_children(list(self._children.values()))
+            self._unlink_app()
         self._loop.stop()
 
     # Control socket
@@ -258,7 +272,10 @@ class Supervisor:
                 async with self._lifecycle:
                     self._refuse_while_exiting()
                     targets = [c for c in self._children.values() if request.app in (None, c.app)]
-                    return protocol.ok(stopped=await self._stop_children(targets))
+                    stopped = await self._stop_children(targets)
+                    if not self._children:
+                        self._unlink_app()
+                    return protocol.ok(stopped=stopped)
 
     def _refuse_while_exiting(self) -> None:
         if self._exiting:
@@ -286,6 +303,7 @@ class Supervisor:
         started = time.monotonic()
         await self._stop_children(list(self._children.values()))
         stop_ms = _ms_since(started)
+        self._link_app(app)
 
         env = {**os.environ, **request.env}
         log = self._open_log(app)
@@ -421,6 +439,29 @@ class Supervisor:
             await target.exited
         return {"app": target.app, "pid": target.pid, **_exit_fields(target.exited.result())}
 
+    # The app link
+
+    def _link_app(self, app: str) -> None:
+        """Points the link behind the alias at the app; a restart of the same app finds it in place."""
+        if (link := self._config.app_link) is None:
+            return
+        try:
+            if os.path.islink(link) and os.readlink(link) == app:
+                return
+            pending = f"{link}.{os.getpid()}"
+            with suppress(FileNotFoundError):
+                os.unlink(pending)
+            os.symlink(app, pending)
+            os.replace(pending, link)
+        except OSError as e:
+            logger.warning(f"Cannot point {link} at {app}: {e}")
+
+    def _unlink_app(self) -> None:
+        """Removes the link behind the alias: no app runs."""
+        if self._config.app_link is not None:
+            with suppress(OSError):
+                os.unlink(self._config.app_link)
+
     def _reap(self) -> None:
         while True:
             try:
@@ -437,6 +478,8 @@ class Supervisor:
             if reaped is None:
                 continue
             del self._children[reaped.app]
+            if not self._children and not self._lifecycle.locked():
+                self._unlink_app()
             # What the app left behind dies with it, as in a container whose main process ends
             with suppress(ProcessLookupError, PermissionError):
                 os.killpg(pid, signal.SIGKILL)

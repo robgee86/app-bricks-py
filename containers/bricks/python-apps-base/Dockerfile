@@ -50,6 +50,9 @@ RUN set -ex; \
     python -m compileall /usr/local/bin; \
     python -m compileall /usr/local/lib
 
+# /app names the running app: the launcher points this link at its folder, in place of the base image folder
+RUN rmdir /app && ln -s /home/app/current-app /app
+
 USER arduino
 
 WORKDIR /home/app
