@@ -43,11 +43,6 @@ class Launch:
     """Whether the child confines itself to the app folder with Landlock before running the app."""
 
     @property
-    def tmpdir(self) -> str:
-        """The temporary folder of the app, inside its own folder: what tempfile and most libraries use."""
-        return os.path.join(self.app, ".cache", "tmp")
-
-    @property
     def main_py(self) -> str:
         return os.path.join(self.app, "python", "main.py")
 
@@ -83,7 +78,7 @@ def _venv_has_packages(app: str) -> bool:
 
 def environment(launch: Launch) -> dict[str, str]:
     """Builds the app environment: the launch one and the run.sh additions."""
-    env = {**launch.env, "PYTHONUNBUFFERED": "1", "TMPDIR": launch.tmpdir}
+    env = {**launch.env, "PYTHONUNBUFFERED": "1"}
     bricks = os.path.join(launch.app, "bricks")
     if os.path.isdir(bricks):
         env["PYTHONPATH"] = os.pathsep.join(filter(None, [env.get("PYTHONPATH"), bricks]))
@@ -120,7 +115,6 @@ def run(launch: Launch) -> int:
     env = environment(launch)
     os.environ.clear()
     os.environ.update(env)
-    os.makedirs(launch.tmpdir, exist_ok=True)
     os.chdir(launch.app)
     if launch.confine:
         # Binds this thread and all it creates: the supervisor forks only while it is the sole thread, so the app inherits it whole

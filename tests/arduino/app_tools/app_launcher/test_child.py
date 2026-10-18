@@ -71,7 +71,7 @@ def test_streamlit_apps_are_exec_d_through_streamlit(tmp_path):
 
 def test_environment_is_the_launch_one_unbuffered(tmp_path):
     env = environment(Launch(app=str(tmp_path), env={"HOME": "/home/app"}, output_fd=-1))
-    assert env == {"HOME": "/home/app", "PYTHONUNBUFFERED": "1", "TMPDIR": f"{tmp_path}/.cache/tmp"}
+    assert env == {"HOME": "/home/app", "PYTHONUNBUFFERED": "1"}
 
 
 def test_environment_adds_the_app_bricks_to_pythonpath(tmp_path):

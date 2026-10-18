@@ -66,7 +66,7 @@ LANDLOCK = landlock_abi()
 
 # An app that peeks at a sibling app, binds its ports and reports what happened
 PEEKING_MAIN = """
-import os, signal, socket, sys
+import os, signal, socket, sys, tempfile
 def attempt(name, fn):
     try:
         fn(); print(name + ": allowed", flush=True)
@@ -76,7 +76,7 @@ sibling = os.path.join(os.path.dirname(os.getcwd()), "hello")
 attempt("read sibling", lambda: open(os.path.join(sibling, "app.yaml")).read())
 attempt("list apps", lambda: os.listdir(os.path.dirname(os.getcwd())))
 attempt("read own", lambda: open("app.yaml").read())
-attempt("write tmp", lambda: open(os.path.join(os.environ["TMPDIR"], "x"), "w").write("x"))
+attempt("write tmp", lambda: tempfile.TemporaryFile().close())
 attempt("bind 7000", lambda: socket.socket().bind(("127.0.0.1", 7000)))
 attempt("bind 7001", lambda: socket.socket().bind(("127.0.0.1", 7001)))
 attempt("bind ephemeral", lambda: socket.socket().bind(("127.0.0.1", 0)))
