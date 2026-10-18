@@ -43,6 +43,8 @@ class Start:
     app: str
     env: dict[str, str] = field(default_factory=dict[str, str])
     mode: Mode = Mode.REPLACE
+    ports: tuple[int, ...] = ()
+    """The TCP ports the app may bind, the ones it declares."""
 
 
 @dataclass(frozen=True)
@@ -94,6 +96,7 @@ def decode_request(line: bytes) -> Request:
                 app=_app(message.get("app")),
                 env=_env(message.get("env", {})),
                 mode=_mode(message.get("mode", Mode.REPLACE)),
+                ports=_ports(message.get("ports", [])),
             )
         case {"cmd": "stop"}:
             app = message.get("app")
@@ -106,6 +109,12 @@ def decode_request(line: bytes) -> Request:
             raise LauncherError(ErrorCode.BAD_REQUEST, f"unknown cmd: {cmd!r}")
         case _:
             raise LauncherError(ErrorCode.BAD_REQUEST, "a request must be a JSON object with a cmd")
+
+
+def _ports(value: object) -> tuple[int, ...]:
+    if not isinstance(value, list) or not all(isinstance(p, int) and not isinstance(p, bool) and 1 <= p <= 65535 for p in value):
+        raise LauncherError(ErrorCode.BAD_REQUEST, "ports must be a list of port numbers")
+    return tuple(sorted(set(value)))
 
 
 def _app(value: object) -> str:

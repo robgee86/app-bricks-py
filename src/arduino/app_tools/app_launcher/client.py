@@ -39,6 +39,7 @@ def main(argv: Sequence[str]) -> int:
     start.add_argument("app", help="app folder")
     start.add_argument("--env", action="append", default=[], metavar="K=V", help="app environment variable, repeatable")
     start.add_argument("--mode", default=str(Mode.REPLACE), choices=[str(mode) for mode in Mode])
+    start.add_argument("--port", action="append", type=int, default=[], metavar="P", help="a TCP port the app may bind, repeatable")
     stop = commands.add_parser("stop", help="stop one app, or every app")
     stop.add_argument("app", nargs="?", help="app folder")
     args = parser.parse_args(argv)
@@ -51,6 +52,7 @@ def main(argv: Sequence[str]) -> int:
             "app": os.path.abspath(args.app),
             "env": {key: value for key, _, value in (item.partition("=") for item in args.env)},
             "mode": args.mode,
+            "ports": args.port,
         }
     elif args.cmd == "stop" and args.app:
         message["app"] = os.path.abspath(args.app)
