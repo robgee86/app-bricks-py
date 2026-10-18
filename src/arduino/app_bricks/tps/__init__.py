@@ -257,8 +257,17 @@ class TPS:
         Raises:
             RuntimeError: If the scanner is unreachable or the scan failed.
         """
+        # The token sits beside the socket, in this app's folder: the scanner writes it at every start, and only this app can read it
+        token_path = os.path.join(os.path.dirname(self.scanner_socket_path), "token")
         try:
-            response = http.get(f"{http.unix_socket_url(self.scanner_socket_path)}/scan", timeout=HTTP_REQ_TIMEOUT_SEC)
+            with open(token_path, encoding="utf-8") as token_file:
+                token = token_file.read().strip()
+        except OSError as e:
+            raise RuntimeError(f"Wi-Fi scanner not started, no token at {token_path}: {e}") from e
+        try:
+            response = http.get(
+                f"{http.unix_socket_url(self.scanner_socket_path)}/scan", headers={"Authorization": f"Bearer {token}"}, timeout=HTTP_REQ_TIMEOUT_SEC
+            )
         except http.ConnectionFailed as e:
             raise RuntimeError(f"Wi-Fi scanner unreachable at {self.scanner_socket_path}: {e}") from e
 

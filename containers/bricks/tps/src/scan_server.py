@@ -2,21 +2,52 @@
 #
 # SPDX-License-Identifier: MPL-2.0
 
-"""HTTP API serving Wi-Fi scan results to the app container over a Unix domain socket."""
+"""HTTP API serving Wi-Fi scan results to the app container over a Unix domain socket.
+
+Only the app owning the socket folder may ask: a token is written beside the socket when serving starts, and every request
+must present it. Any process of the board can connect to a socket by its path, but only that app can read its folder.
+"""
 
 import logging
 import os
+import secrets
 import threading
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 
 from iw_scanner import ScanError, ScanResult, list_interfaces, scan
 
 logger = logging.getLogger("scan_server")
 
 SCAN_CACHE_SECONDS = int(os.getenv("SCAN_CACHE_SECONDS", "10"))
+SOCKET_PATH = os.getenv("SCANNER_SOCKET_PATH", "/app/.cache/tps_location_api/scanner.sock")
+TOKEN_PATH = os.path.join(os.path.dirname(SOCKET_PATH), "token")
+TOKEN = secrets.token_urlsafe(32)
+"""The secret of this run of the scanner, written to TOKEN_PATH for the app; a restart rotates it."""
+
+
+def write_token() -> None:
+    """Writes the token beside the socket, readable by the owner only."""
+    fd = os.open(TOKEN_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as token_file:
+        token_file.write(TOKEN)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    write_token()
+    yield
+
+
+def authorized(request: Request) -> None:
+    """Refuses a request without the token of this run, with 401 and no detail about what was wrong."""
+    scheme, _, presented = request.headers.get("authorization", "").partition(" ")
+    if scheme.lower() != "bearer" or not secrets.compare_digest(presented.strip(), TOKEN):
+        raise HTTPException(status_code=401, detail="scanner token required")
 
 
 class ScanCache:
@@ -37,7 +68,15 @@ class ScanCache:
             return self._result, False
 
 
-app = FastAPI(title="TPS Location Wi-Fi Scanner", version="1.0.0", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(
+    title="TPS Location Wi-Fi Scanner",
+    version="1.0.0",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+    lifespan=lifespan,
+    dependencies=[Depends(authorized)],
+)
 cache = ScanCache(SCAN_CACHE_SECONDS)
 
 

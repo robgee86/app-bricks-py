@@ -5,6 +5,7 @@
 import json
 import socket
 import tempfile
+from pathlib import Path
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from email.message import Message
@@ -142,10 +143,19 @@ def socket_dir():
 def scanner_socket(socket_dir):
     """A fake scanner listening on a Unix socket, answering /scan with SCAN_RESULT."""
 
+    token = "the-token-of-this-run"
+    Path(socket_dir, "token").write_text(token)
+
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            body = json.dumps(SCAN_RESULT if self.path == "/scan" else {"detail": "not found"}).encode()
-            self.send_response(200 if self.path == "/scan" else 404)
+            if self.headers.get("Authorization") != f"Bearer {token}":
+                body, status = json.dumps({"detail": "scanner token required"}).encode(), 401
+            else:
+                body, status = (
+                    json.dumps(SCAN_RESULT if self.path == "/scan" else {"detail": "not found"}).encode(),
+                    200 if self.path == "/scan" else 404,
+                )
+            self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
@@ -170,7 +180,16 @@ def test_scan_talks_to_the_scanner_over_a_unix_socket(scanner_socket):
     api.stop()
 
 
+def test_scan_reports_a_scanner_that_has_not_started(socket_dir):
+    api = TPS(auth_key="key", auth_user="user")
+    api.scanner_socket_path = f"{socket_dir}/scanner.sock"
+    with pytest.raises(RuntimeError, match="not started"):
+        api._scan()
+    api.stop()
+
+
 def test_scan_reports_unreachable_scanner(socket_dir):
+    Path(socket_dir, "token").write_text("some token")
     api = TPS(auth_key="key", auth_user="user")
     api.scanner_socket_path = f"{socket_dir}/missing.sock"
     with pytest.raises(RuntimeError, match="unreachable"):

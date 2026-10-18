@@ -151,4 +151,6 @@ The optional parameters work the same way for every method that accepts them:
 
 The Brick runs a companion scanner container alongside your app. The container uses the board's wireless interface to scan for nearby access points and shares the results with the Brick. To limit the scan rate, results are reused for 10 seconds, so lookups closer together than that share the same scan.
 
+The scanner answers only your app: it listens on a Unix socket in your app's `.cache/tps_location_api` folder and, at every start, writes a token beside it that each request must present. Any process on the board can connect to a socket by its path, but only your app can read its own folder, so the token keeps other apps out.
+
 For each lookup, the Brick sends the MAC address, signal strength and age of every visible access point to the TPS Location API, which returns the estimated position. If no access points are visible, for example in a shielded room, the lookup fails because the service does not fall back to IP-based location.
