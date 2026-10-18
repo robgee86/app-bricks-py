@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from arduino.app_tools.app_launcher import client
+from arduino.app_tools.app_launcher import client, confinement
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="the launcher forks, POSIX only")
 
@@ -55,6 +55,35 @@ echo prepared >> "$APP_DIR/prepared.marker"
 """
 
 
+def landlock_abi():
+    try:
+        return confinement.abi()
+    except confinement.Unavailable:
+        return None
+
+
+LANDLOCK = landlock_abi()
+
+# An app that peeks at a sibling app, binds its ports and reports what happened
+PEEKING_MAIN = """
+import os, signal, socket, sys
+def attempt(name, fn):
+    try:
+        fn(); print(name + ": allowed", flush=True)
+    except OSError as e:
+        print(name + ": denied " + e.strerror, flush=True)
+sibling = os.path.join(os.path.dirname(os.getcwd()), "hello")
+attempt("read sibling", lambda: open(os.path.join(sibling, "app.yaml")).read())
+attempt("list apps", lambda: os.listdir(os.path.dirname(os.getcwd())))
+attempt("read own", lambda: open("app.yaml").read())
+attempt("write tmp", lambda: open(os.path.join(os.environ["TMPDIR"], "x"), "w").write("x"))
+attempt("bind 7000", lambda: socket.socket().bind(("127.0.0.1", 7000)))
+attempt("bind 7001", lambda: socket.socket().bind(("127.0.0.1", 7001)))
+attempt("bind ephemeral", lambda: socket.socket().bind(("127.0.0.1", 0)))
+signal.pause()
+"""
+
+
 def wait_until(condition, timeout=5.0, details=lambda: ""):
     deadline = time.monotonic() + timeout
     while not (result := condition()):
@@ -63,9 +92,9 @@ def wait_until(condition, timeout=5.0, details=lambda: ""):
     return result
 
 
-def short_folder():
+def short_folder(prefix="launcher", parent="/tmp"):
     # AF_UNIX paths are limited to about 100 bytes
-    return Path(tempfile.mkdtemp(prefix="launcher", dir="/tmp")).resolve()
+    return Path(tempfile.mkdtemp(prefix=prefix, dir=parent)).resolve()
 
 
 def spawn(root, preload="json"):
@@ -87,6 +116,8 @@ def spawn(root, preload="json"):
         "APP_LAUNCHER_STOP_TIMEOUT_S": "1",
         "APP_LAUNCHER_RUN_SH": str(run_sh),
         "APP_LAUNCHER_APP_ALIAS": str(root / "app"),
+        # Confined for real where the kernel allows it, which the test apps under /tmp survive; off on macOS
+        "APP_LAUNCHER_CONFINEMENT": "required" if LANDLOCK else "off",
         "GREETING": "from the launcher",
         "INHERITED": "yes",
     }
@@ -101,6 +132,8 @@ class Launcher:
         self.root = root
         self.socket = str(root / "launcher.sock")
         self.app_link = root / "current-app"
+        # The apps live outside the folders a confined app may reach, /tmp among them, so that one app cannot see another
+        self.apps = short_folder("apps", "/var/tmp")
         self.process = spawn(root)
         wait_until(self.answers, details=lambda: (root / "launcher.log").read_text())
 
@@ -114,7 +147,7 @@ class Launcher:
         return client.request(message, self.socket, timeout_s=10)
 
     def app(self, name, app_yaml=""):
-        app = self.root / name
+        app = self.apps / name
         (app / "python").mkdir(parents=True)
         (app / "python" / "main.py").write_text(FAKE_MAIN)
         (app / "app.yaml").write_text(app_yaml)
@@ -133,6 +166,7 @@ def launcher():
     if launcher.process.poll() is None:
         launcher.close()
     shutil.rmtree(root)
+    shutil.rmtree(launcher.apps)
 
 
 def gone(pid):
@@ -219,6 +253,22 @@ def test_refuses_requests_from_the_processes_of_an_app(launcher):
     assert launcher.request({"cmd": "stop"})["stopped"][0]["pid"] == started["pid"], "the test, outside, still can"
 
 
+@pytest.mark.skipif(LANDLOCK is None, reason="the kernel has no Landlock")
+def test_confines_an_app_to_its_own_folder_and_ports(launcher):
+    if not (launcher.apps / "hello").exists():
+        launcher.app("hello")
+    app = launcher.app("peeking")
+    (app / "python" / "main.py").write_text(PEEKING_MAIN)
+    started = launcher.request({"cmd": "start", "app": str(app), "mode": "replace", "ports": [7000]})
+    assert started["ok"] and started["confined"]
+    log = log_of(app, until="bind ephemeral")
+    assert "read sibling: denied" in log and "list apps: denied" in log
+    assert "read own: allowed" in log and "write tmp: allowed" in log
+    assert "bind 7000: allowed" in log and "bind 7001: denied" in log and "bind ephemeral: allowed" in log
+    assert launcher.request({"cmd": "status"})["confinement"] == {"required": True, "landlock_abi": LANDLOCK}
+    launcher.request({"cmd": "stop"})
+
+
 def test_runs_streamlit_apps_through_streamlit_on_port_7000(launcher):
     app = launcher.app("dashboard", app_yaml="bricks:\n  - arduino:streamlit_ui: {}\n")
     started = launcher.request({"cmd": "start", "app": str(app)})
@@ -261,9 +311,9 @@ def test_a_failing_preparation_starts_nothing(launcher):
 
 def test_refuses_what_is_not_an_app(launcher):
     assert launcher.request({"cmd": "start", "app": "relative/app"})["error"]["code"] == "bad_request"
-    assert launcher.request({"cmd": "start", "app": str(launcher.root / "missing")})["error"]["code"] == "not_found"
-    (launcher.root / "empty").mkdir()
-    assert launcher.request({"cmd": "start", "app": str(launcher.root / "empty")})["error"]["code"] == "not_found"
+    assert launcher.request({"cmd": "start", "app": str(launcher.apps / "missing")})["error"]["code"] == "not_found"
+    (launcher.apps / "empty").mkdir()
+    assert launcher.request({"cmd": "start", "app": str(launcher.apps / "empty")})["error"]["code"] == "not_found"
 
 
 def test_the_client_prints_the_response(launcher, capsys):
@@ -273,7 +323,7 @@ def test_the_client_prints_the_response(launcher, capsys):
     assert log_of(app).endswith(" a=b yes\n")
     assert client.main(["--socket", launcher.socket, "status"]) == 0
     assert [child["pid"] for child in json.loads(capsys.readouterr().out)["children"]] == [pid]
-    assert client.main(["--socket", launcher.socket, "start", str(launcher.root / "missing")]) == 1
+    assert client.main(["--socket", launcher.socket, "start", str(launcher.apps / "missing")]) == 1
     assert json.loads(capsys.readouterr().out)["error"]["code"] == "not_found"
     assert client.main(["--socket", launcher.socket, "stop", str(app)]) == 0
     assert json.loads(capsys.readouterr().out)["stopped"][0]["pid"] == pid

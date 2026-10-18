@@ -106,7 +106,7 @@ async def run(app, script, timeout_s=5.0):
 
     log = AppLog(str(app / ".cache" / "logs" / "app.log"))
     try:
-        await prepare.run(str(app), {"PATH": os.environ["PATH"]}, script, timeout_s, log, watch)
+        await prepare.run(str(app), {"PATH": os.environ["PATH"]}, script, timeout_s, log, watch, confine=False)
     finally:
         log.close()
         await asyncio.gather(*reapers)

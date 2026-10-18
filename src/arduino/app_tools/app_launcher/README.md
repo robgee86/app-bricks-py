@@ -23,14 +23,14 @@ A request from a process the launcher itself spawned, an app or anything an app 
 
 | Request | Response |
 |---|---|
-| `{"cmd":"start","app":"<abs folder>","env":{...},"mode":"replace"}` | `{"ok":true,"pid":N,"started_at":"<iso>","warm":true,"runner":"python","prepared":false,"timings":{"stop_ms":..,"prepare_ms":..,"fork_ms":..}}` |
+| `{"cmd":"start","app":"<abs folder>","env":{...},"mode":"replace","ports":[7000]}` | `{"ok":true,"pid":N,"started_at":"<iso>","warm":true,"runner":"python","confined":true,"prepared":false,"timings":{"stop_ms":..,"prepare_ms":..,"fork_ms":..}}` |
 | `{"cmd":"stop"}` or `{"cmd":"stop","app":"<abs folder>"}` | `{"ok":true,"stopped":[{"app":..,"pid":..,"exit_code":..,"signal":..}]}` |
-| `{"cmd":"status"}` | `{"ok":true,"children":[{"app","pid","state","started_at","runner","warm"}],"preload":{"modules":[..],"failed":[..]},"version":..,"uptime_s":..}` |
+| `{"cmd":"status"}` | `{"ok":true,"confinement":{"required":true,"landlock_abi":N},"children":[{"app","pid","state","started_at","runner","warm"}],"preload":{"modules":[..],"failed":[..]},"version":..,"uptime_s":..}` |
 | `{"cmd":"ping"}` | `{"ok":true}` |
 
-`start` with `replace` stops every running app first, prepares the new one when needed, then forks it. `mode` `add` is refused with `unsupported`: one app at a time for now. Stopping an app that is not running is not an error. A stop sends SIGTERM, waits the grace period, then SIGKILLs the app's process group; whatever the app leaves in its group is killed once it exits, as in a container whose main process ends.
+`start` with `replace` stops every running app first, prepares the new one when needed, then forks it; its `ports` are the TCP ports the app may bind, the ones it declares, none when absent, see [Confinement](#confinement). `mode` `add` is refused with `unsupported`: one app at a time for now. Stopping an app that is not running is not an error. A stop sends SIGTERM, waits the grace period, then SIGKILLs the app's process group; whatever the app leaves in its group is killed once it exits, as in a container whose main process ends.
 
-Errors are `{"ok":false,"error":{"code":..,"message":..}}` with `code` one of `bad_request` (malformed request, relative app path), `not_found` (no app folder or no `python/main.py`), `unsupported` (`mode` `add`), `forbidden` (a request from a process of an app), `busy` (the launcher is shutting down), `prepare_failed` (`run.sh prepare` failed, was stopped or timed out, with the last lines of its output), `internal` (fork refused or failed, unexpected errors).
+Errors are `{"ok":false,"error":{"code":..,"message":..}}` with `code` one of `bad_request` (malformed request, relative app path), `not_found` (no app folder or no `python/main.py`), `unsupported` (`mode` `add`, or confinement required on a kernel without Landlock), `forbidden` (a request from a process of an app), `busy` (the launcher is shutting down), `prepare_failed` (`run.sh prepare` failed, was stopped or timed out, with the last lines of its output), `internal` (fork refused or failed, unexpected errors).
 
 ## Environment
 
@@ -41,11 +41,12 @@ Errors are `{"ok":false,"error":{"code":..,"message":..}}` with `code` one of `b
 | `APP_LAUNCHER_STOP_TIMEOUT_S` | `5` | Grace period between SIGTERM and SIGKILL, the CLI's container stop timeout |
 | `APP_LAUNCHER_RUN_SH` | `/run.sh` | The entrypoint whose `prepare` mode installs the app dependencies |
 | `APP_LAUNCHER_PREPARE_TIMEOUT_S` | `600` | How long a preparation may take before it is killed; the client waits this long plus a minute for a `start` |
+| `APP_LAUNCHER_CONFINEMENT` | `required` | `required` confines every app and preparation with Landlock and starts nothing on a kernel without it; `off` is for development machines, macOS included |
 | `APP_LAUNCHER_APP_ALIAS` | `/app` | The alias of the running app, a link to the link the supervisor points at the app folder, see [The app folder](#the-app-folder) |
 
 ## Ports
 
-The launcher publishes no port: the CLI's ingress does, forwarding each public port of the app to the same port in the launcher's container. The app binds its ports as it would in a container of its own.
+The launcher publishes no port: the CLI's ingress does, forwarding each public port of the app to the same port in the launcher's container, where the app binds it. The `ports` of the `start` request are those ports, the ones the app's bricks declare, and the only TCP ports the confined app may bind.
 
 ## The app child
 
@@ -54,14 +55,27 @@ Before any app code runs, the child:
 1. becomes a session and process group leader;
 2. points every inherited fd above 2 at `/dev/null` and its stdout and stderr at the log pipe;
 3. gets back the signal dispositions the supervisor had after the preload, which are those of a fresh `python main.py`;
-4. gets the supervisor's environment with the request's `env` on top, then `PYTHONUNBUFFERED=1`, and `<app>/bricks` on `PYTHONPATH` when it exists;
-5. moves to the app folder, sets `sys.argv` and `sys.path` as a fresh interpreter would;
+4. gets the supervisor's environment with the request's `env` on top, then `PYTHONUNBUFFERED=1`, `TMPDIR=<app>/.cache/tmp`, and `<app>/bricks` on `PYTHONPATH` when it exists;
+5. moves to the app folder, confines itself to it, see [Confinement](#confinement), and sets `sys.argv` and `sys.path` as a fresh interpreter would;
 6. runs `python/main.py` as a permanent `__main__` module: a fresh module with the dunders of a script, not `runpy`, so the app's threads and atexit handlers keep seeing it. Uncaught exceptions go through `sys.excepthook` without the launcher frames, with exit code 1; `SystemExit` is honoured and the interpreter exits normally.
 
 Two kinds of apps are not run warm: the child execs instead, with the same environment, cwd and process group, and `start` reports `"warm":false`.
 
 - An app with dependencies of its own, as the preparation defines them, or whose venv `<app>/.cache/.venv` holds a `*.dist-info` or a `*.pth` other than the `_virtualenv.pth` of an empty `uv venv`. The child execs the venv interpreter on `main.py`, with `VIRTUAL_ENV` set and its `bin` first on `PATH`.
 - A Streamlit app, whose `app.yaml` mentions `arduino:streamlit_ui` as run.sh checks: the child execs `<venv python> -m streamlit run --server.port 7000 <app>/python/main.py`, the port run.sh always gave Streamlit, since the preparation installs Streamlit in the venv. `start` reports `"runner":"streamlit"`.
+
+## Confinement
+
+Every app runs confined to its own folder with Landlock, the kernel's unprivileged sandbox, applied by the child itself right before the app code runs (`confinement.py`) and by the preparation before `run.sh prepare`. No capability or profile is involved: the process restricts itself, a later ruleset can only tighten it, and the restriction follows exec and fork. It is an allow-list:
+
+- read and write: the app folder, `/dev` with its ioctls, `/tmp`, the home `/home/app` and `XDG_RUNTIME_DIR`;
+- read and execute: `/usr`, `/lib`, `/bin`, `/sbin`, `/etc`, `/opt`, `/sys`, `/proc`, `/run.sh`, and `MODELS_PATH` when set;
+- bind: the TCP ports of the `start` request, plus an ephemeral port of the kernel's choice, which libraries use for helper servers of their own;
+- nothing else: the other apps' folders and the apps root cannot be read, listed or written, the environment and the memory of other processes cannot be read through `/proc`, and on kernels with Landlock ABI 6 or later no signal reaches a process outside the app and no abstract Unix socket of another process accepts it.
+
+`TMPDIR` points at `<app>/.cache/tmp`, so temporary files land in the app folder; `/tmp` and `/dev/shm` stay shared, the latter holding the semaphores of `multiprocessing`. Landlock does not mediate connecting to a Unix socket by its path: a server reached that way checks its clients itself, as the launcher does with the peer pid and the TPS scanner with a token in the app folder.
+
+`status` reports the ABI in use. With `APP_LAUNCHER_CONFINEMENT=required`, the default, a kernel without Landlock starts no app: `start` is refused with `unsupported`.
 
 ## Preparation
 

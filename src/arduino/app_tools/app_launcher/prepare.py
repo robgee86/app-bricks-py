@@ -9,6 +9,7 @@ import glob
 import hashlib
 import logging
 import os
+import sys
 import signal
 from collections.abc import Callable, Mapping
 from contextlib import suppress
@@ -101,18 +102,24 @@ def record(app: str, current: str) -> None:
     os.replace(temporary, path)
 
 
-async def run(app: str, env: Mapping[str, str], run_sh: str, timeout_s: float, log: AppLog | None, watch: Watch) -> None:
+async def run(app: str, env: Mapping[str, str], run_sh: str, timeout_s: float, log: AppLog | None, watch: Watch, confine: bool = True) -> None:
     """Runs `run.sh prepare` on the app in its own process group, its output appended to the app log.
+
+    The preparation runs app code, the install steps of its dependencies: confined to the app folder like the app itself,
+    through the confinement module as a command, since posix_spawn runs nothing of ours before the exec.
 
     Raises:
         LauncherError: prepare_failed when run.sh cannot start, fails, is stopped or exceeds the timeout.
     """
+    argv = [run_sh, "prepare"]
+    if confine:
+        argv = [sys.executable, "-m", "arduino.app_tools.app_launcher.confinement", "--app", app, "--", *argv]
     output_fd, input_fd = os.pipe()
     try:
         # posix_spawn, not a subprocess helper: only the supervisor reaper waits for its processes
         pid = os.posix_spawn(
-            run_sh,
-            [run_sh, "prepare"],
+            argv[0],
+            argv,
             {**env, "APP_DIR": app},
             file_actions=[
                 (os.POSIX_SPAWN_OPEN, 0, os.devnull, os.O_RDONLY, 0),
