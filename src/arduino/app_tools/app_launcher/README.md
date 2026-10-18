@@ -19,6 +19,8 @@ arduino-app-launcher [--socket PATH] ping | status | start <app> [--env K=V ...]
 
 A Unix socket at `APP_LAUNCHER_SOCKET`, mode 0660. One JSON object per line, one request per connection, then the response and the connection closes. Lifecycle requests (`start`, `stop`) run one at a time; `status` and `ping` answer immediately.
 
+A request from a process the launcher itself spawned, an app or anything an app left behind, is refused with `forbidden`: the peer's pid, which the kernel attaches to the connection, descends from the launcher. The daemon and the CLI connect from outside the container's pid namespace, where that pid reads 0, and a `docker exec` client, the health check, descends from outside too. On macOS, where no peer pid exists, nothing is refused.
+
 | Request | Response |
 |---|---|
 | `{"cmd":"start","app":"<abs folder>","env":{...},"mode":"replace"}` | `{"ok":true,"pid":N,"started_at":"<iso>","warm":true,"runner":"python","prepared":false,"timings":{"stop_ms":..,"prepare_ms":..,"fork_ms":..}}` |
@@ -28,7 +30,7 @@ A Unix socket at `APP_LAUNCHER_SOCKET`, mode 0660. One JSON object per line, one
 
 `start` with `replace` stops every running app first, prepares the new one when needed, then forks it. `mode` `add` is refused with `unsupported`: one app at a time for now. Stopping an app that is not running is not an error. A stop sends SIGTERM, waits the grace period, then SIGKILLs the app's process group; whatever the app leaves in its group is killed once it exits, as in a container whose main process ends.
 
-Errors are `{"ok":false,"error":{"code":..,"message":..}}` with `code` one of `bad_request` (malformed request, relative app path), `not_found` (no app folder or no `python/main.py`), `unsupported` (`mode` `add`), `busy` (the launcher is shutting down), `prepare_failed` (`run.sh prepare` failed, was stopped or timed out, with the last lines of its output), `internal` (fork refused or failed, unexpected errors).
+Errors are `{"ok":false,"error":{"code":..,"message":..}}` with `code` one of `bad_request` (malformed request, relative app path), `not_found` (no app folder or no `python/main.py`), `unsupported` (`mode` `add`), `forbidden` (a request from a process of an app), `busy` (the launcher is shutting down), `prepare_failed` (`run.sh prepare` failed, was stopped or timed out, with the last lines of its output), `internal` (fork refused or failed, unexpected errors).
 
 ## Environment
 
