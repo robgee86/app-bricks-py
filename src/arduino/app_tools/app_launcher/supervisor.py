@@ -29,7 +29,7 @@ from typing import Any, NoReturn
 
 from arduino.version import __version__
 
-from . import child, prepare, protocol
+from . import child, confinement, prepare, protocol
 from .applog import CHUNK_BYTES, AppLog
 from .child import Launch, Runner
 from .protocol import ErrorCode, LauncherError, Mode, Ping, Request, Start, Status, Stop
@@ -62,6 +62,8 @@ class Config:
     stop_timeout_s: float
     run_sh: str
     prepare_timeout_s: float
+    confine: bool
+    """Whether apps and their preparations run confined to their folder with Landlock; off is for development only."""
     app_link: str | None
     """The link behind the alias, pointed at the running app; None when the alias is not a link, as outside the image."""
 
@@ -78,8 +80,19 @@ class Config:
             stop_timeout_s=float(env.get("APP_LAUNCHER_STOP_TIMEOUT_S", "5")),
             run_sh=env.get("APP_LAUNCHER_RUN_SH", DEFAULT_RUN_SH),
             prepare_timeout_s=float(env.get("APP_LAUNCHER_PREPARE_TIMEOUT_S", "600")),
+            confine=_confinement_mode(env.get("APP_LAUNCHER_CONFINEMENT", "required")),
             app_link=_link_behind(env.get("APP_LAUNCHER_APP_ALIAS", DEFAULT_APP_ALIAS)),
         )
+
+
+def _confinement_mode(value: str) -> bool:
+    match value:
+        case "required":
+            return True
+        case "off":
+            return False
+        case other:
+            raise ValueError(f"APP_LAUNCHER_CONFINEMENT must be required or off, not {other!r}")
 
 
 def _link_behind(alias: str) -> str | None:
@@ -161,6 +174,7 @@ class Supervisor:
         self._loop = asyncio.new_event_loop()
         self._lifecycle = asyncio.Lock()
         self._children: dict[str, Child] = {}
+        self._landlock_abi = self._probe_confinement()
         self._preparations: dict[int, _Preparation] = {}
         self._control: asyncio.Server | None = None
         self._fork_request: _ForkRequest | None = None
@@ -216,6 +230,21 @@ class Supervisor:
             self._control.close()
         with suppress(FileNotFoundError):
             os.unlink(self._config.socket_path)
+
+    def _probe_confinement(self) -> int | None:
+        """The Landlock ABI apps are confined with; None when confinement is off, or required and unavailable: no app starts then."""
+        if not self._config.confine:
+            logger.warning("Confinement is off: apps are not confined to their folder, development only")
+            return None
+        try:
+            return confinement.abi()
+        except confinement.Unavailable:
+            logger.error("Confinement is required but the kernel has no Landlock: no app will be started")
+            return None
+
+    def _refuse_unconfined(self) -> None:
+        if self._config.confine and self._landlock_abi is None:
+            raise LauncherError(ErrorCode.UNSUPPORTED, "the kernel has no Landlock to confine apps with, and confinement is required")
 
     def _log_ready(self) -> None:
         threads = [thread.name for thread in threading.enumerate()]
@@ -285,6 +314,7 @@ class Supervisor:
 
     def _status(self) -> dict[str, Any]:
         return {
+            "confinement": {"required": self._config.confine, "landlock_abi": self._landlock_abi},
             "children": [c.describe() for c in self._children.values()],
             "preload": {"modules": list(self._config.preload), "failed": list(self._preload_failed)},
             "version": __version__,
@@ -297,6 +327,7 @@ class Supervisor:
         if request.mode is Mode.ADD:
             raise LauncherError(ErrorCode.UNSUPPORTED, "only one app at a time is supported for now, use mode replace")
         app = request.app
+        self._refuse_unconfined()
         if not os.path.isdir(app):
             raise LauncherError(ErrorCode.NOT_FOUND, f"no app folder at {app}")
         if not os.path.isfile(os.path.join(app, "python", "main.py")):
@@ -316,7 +347,15 @@ class Supervisor:
         started = time.monotonic()
         output_fd, input_fd = os.pipe()
         os.set_blocking(output_fd, False)
-        launch = Launch(app=app, env=env, output_fd=input_fd, runner=child.runner(app), interpreter=child.venv_interpreter(app))
+        launch = Launch(
+            app=app,
+            env=env,
+            output_fd=input_fd,
+            runner=child.runner(app),
+            interpreter=child.venv_interpreter(app),
+            ports=request.ports,
+            confine=self._config.confine,
+        )
         fork = _ForkRequest(launch=launch, output_fd=output_fd, log=log, done=self._loop.create_future())
         self._fork_request = fork
         self._loop.stop()
@@ -326,6 +365,7 @@ class Supervisor:
             started_at=started_child.started_at.isoformat(),
             warm=started_child.warm,
             runner=str(started_child.runner),
+            confined=self._config.confine,
             prepared=prepared,
             timings={"stop_ms": stop_ms, "prepare_ms": prepare_ms, "fork_ms": _ms_since(started)},
         )
@@ -339,7 +379,15 @@ class Supervisor:
             # Checked in the loop step that spawns run.sh, so a shutdown never misses a preparation
             self._refuse_while_exiting()
             logger.info(f"Preparing {app}")
-            await prepare.run(app, env, self._config.run_sh, self._config.prepare_timeout_s, log, lambda pid: self._watch_preparation(app, pid))
+            await prepare.run(
+                app,
+                env,
+                self._config.run_sh,
+                self._config.prepare_timeout_s,
+                log,
+                lambda pid: self._watch_preparation(app, pid),
+                confine=self._config.confine,
+            )
         except BaseException as e:
             if isinstance(e, LauncherError) and e.code is ErrorCode.PREPARE_FAILED:
                 logger.warning(f"Preparation of {app} failed: {e.message.splitlines()[0]}")
