@@ -97,7 +97,7 @@ def short_folder(prefix="launcher", parent="/tmp"):
     return Path(tempfile.mkdtemp(prefix=prefix, dir=parent)).resolve()
 
 
-def spawn(root, preload="json"):
+def spawn(root, preload="json", confinement=None):
     modules = root / "modules"
     (modules / "streamlit").mkdir(parents=True, exist_ok=True)
     (modules / "streamlit" / "__init__.py").touch()
@@ -117,7 +117,7 @@ def spawn(root, preload="json"):
         "APP_LAUNCHER_RUN_SH": str(run_sh),
         "APP_LAUNCHER_APP_ALIAS": str(root / "app"),
         # Confined for real where the kernel allows it, which the test apps under /tmp survive; off on macOS
-        "APP_LAUNCHER_CONFINEMENT": "required" if LANDLOCK else "off",
+        "APP_LAUNCHER_CONFINEMENT": confinement or ("required" if LANDLOCK else "off"),
         "GREETING": "from the launcher",
         "INHERITED": "yes",
     }
@@ -128,13 +128,13 @@ def spawn(root, preload="json"):
 
 
 class Launcher:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, confinement=None):
         self.root = root
         self.socket = str(root / "launcher.sock")
         self.app_link = root / "current-app"
         # The apps live outside the folders a confined app may reach, /tmp among them, so that one app cannot see another
         self.apps = short_folder("apps", "/var/tmp")
-        self.process = spawn(root)
+        self.process = spawn(root, confinement=confinement)
         wait_until(self.answers, details=lambda: (root / "launcher.log").read_text())
 
     def answers(self):
@@ -267,6 +267,22 @@ def test_confines_an_app_to_its_own_folder_and_ports(launcher):
     assert "bind 7000: allowed" in log and "bind 7001: denied" in log and "bind ephemeral: allowed" in log
     assert launcher.request({"cmd": "status"})["confinement"] == {"required": True, "landlock_abi": LANDLOCK}
     launcher.request({"cmd": "stop"})
+
+
+@pytest.mark.skipif(LANDLOCK is not None, reason="this kernel has Landlock: the launcher confines for real")
+def test_starts_nothing_when_confinement_is_required_but_the_kernel_has_no_landlock():
+    root = short_folder()
+    launcher = Launcher(root, confinement="required")
+    try:
+        app = launcher.app("hello")
+        refused = launcher.request({"cmd": "start", "app": str(app), "mode": "replace"})
+        assert refused["error"]["code"] == "unsupported" and "Landlock" in refused["error"]["message"]
+        assert launcher.request({"cmd": "status"})["confinement"] == {"required": True, "landlock_abi": None}
+        assert "no Landlock" in (root / "launcher.log").read_text()
+    finally:
+        launcher.close()
+        shutil.rmtree(root)
+        shutil.rmtree(launcher.apps)
 
 
 def test_runs_streamlit_apps_through_streamlit_on_port_7000(launcher):
