@@ -23,9 +23,27 @@ def client(monkeypatch):
     monkeypatch.setattr(scan_server, "scan", fake_scan)
     monkeypatch.setattr(scan_server, "cache", scan_server.ScanCache(ttl_seconds=10))
     monkeypatch.setattr(scan_server.time, "time", lambda: 1.5)
-    test_client = TestClient(scan_server.app)
+    test_client = TestClient(scan_server.app, headers={"Authorization": f"Bearer {scan_server.TOKEN}"})
     test_client.scans = scans
     return test_client
+
+
+def test_requests_without_the_token_of_this_run_are_refused(client):
+    anonymous = TestClient(scan_server.app)
+    assert anonymous.get("/scan").status_code == 401
+    assert anonymous.get("/health").status_code == 401
+    assert anonymous.get("/scan", headers={"Authorization": "Bearer not-it"}).status_code == 401
+    assert client.scans == [], "no scan ran for them"
+    assert client.get("/scan").status_code == 200
+
+
+def test_the_token_is_written_beside_the_socket_when_serving_starts(monkeypatch, tmp_path):
+    monkeypatch.setattr(scan_server, "TOKEN_PATH", str(tmp_path / "token"))
+    with TestClient(scan_server.app):
+        pass
+    token = tmp_path / "token"
+    assert token.read_text() == scan_server.TOKEN
+    assert token.stat().st_mode & 0o777 == 0o600
 
 
 def test_scan_returns_access_points(client):
