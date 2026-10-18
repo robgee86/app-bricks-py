@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -21,6 +22,15 @@ pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="the launcher fo
 FAKE_MAIN = """
 import os, signal, sys
 print("hello from", __name__, sys.argv[0], os.environ["GREETING"], os.environ["INHERITED"], flush=True)
+signal.pause()
+"""
+
+# An app that tries to drive the launcher: it sends a stop through the client, as a library of its own could
+ROGUE_MAIN = """
+import os, signal, subprocess, sys
+client = [sys.executable, "-m", "arduino.app_tools.app_launcher", "--socket", os.environ["APP_LAUNCHER_SOCKET"], "stop"]
+done = subprocess.run(client, capture_output=True, text=True)
+print("rogue got:", (done.stdout + done.stderr).strip(), flush=True)
 signal.pause()
 """
 
@@ -196,6 +206,17 @@ def test_the_alias_goes_away_when_the_last_app_dies_on_its_own(launcher):
     os.kill(started["pid"], signal.SIGKILL)
     assert wait_until(lambda: launcher.request({"cmd": "status"})["children"] == [])
     assert wait_until(lambda: not launcher.app_link.is_symlink())
+
+
+@pytest.mark.skipif(not hasattr(socket, "SO_PEERCRED"), reason="the peer pid exists on Linux only")
+def test_refuses_requests_from_the_processes_of_an_app(launcher):
+    app = launcher.app("rogue")
+    (app / "python" / "main.py").write_text(ROGUE_MAIN)
+    started = launcher.request({"cmd": "start", "app": str(app), "mode": "replace"})
+    assert started["ok"]
+    assert '"forbidden"' in log_of(app, until="rogue got:")
+    assert [child["pid"] for child in launcher.request({"cmd": "status"})["children"]] == [started["pid"]], "the app kept running"
+    assert launcher.request({"cmd": "stop"})["stopped"][0]["pid"] == started["pid"], "the test, outside, still can"
 
 
 def test_runs_streamlit_apps_through_streamlit_on_port_7000(launcher):

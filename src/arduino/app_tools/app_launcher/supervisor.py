@@ -16,6 +16,7 @@ import os
 import signal
 import socket
 import stat
+import struct
 import sys
 import threading
 import time
@@ -243,6 +244,7 @@ class Supervisor:
     async def _on_control(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
             try:
+                _refuse_launched_peer(writer)
                 response = await self._handle(await _read_request(reader))
             except LauncherError as e:
                 response = protocol.error(e)
@@ -516,6 +518,40 @@ class Supervisor:
         os.close(fd)
         if log is not None:
             log.close()
+
+
+def _refuse_launched_peer(writer: asyncio.StreamWriter) -> None:
+    """Refuses a client the launcher itself spawned: an app, however far down, must not drive the launcher.
+
+    The daemon and the CLI connect from outside the container's pid namespace, where the kernel reports their pid as 0,
+    and a `docker exec` client descends from outside too. macOS reports no peer pid: development only, nothing is refused.
+    """
+    if not hasattr(socket, "SO_PEERCRED"):
+        return
+    sock = writer.get_extra_info("socket")
+    layout = "iII"
+    pid, _, _ = struct.unpack(layout, sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize(layout)))
+    if _descends_from(pid, os.getpid()):
+        logger.warning(f"Request from pid {pid}, a process of a launched app, refused")
+        raise LauncherError(ErrorCode.FORBIDDEN, f"requests from the processes of an app are refused (pid {pid})")
+
+
+def _descends_from(pid: int, ancestor: int) -> bool:
+    """Whether the process descends from the ancestor, following the parents in /proc; pid 0 is outside this pid namespace."""
+    while pid > 0 and pid != ancestor:
+        pid = _parent_pid(pid)
+    return pid == ancestor
+
+
+def _parent_pid(pid: int) -> int:
+    try:
+        with open(f"/proc/{pid}/status", encoding="utf-8") as status:
+            for line in status:
+                if line.startswith("PPid:"):
+                    return int(line.split()[1])
+    except (OSError, ValueError):
+        pass
+    return 0
 
 
 async def _read_request(reader: asyncio.StreamReader) -> Request:

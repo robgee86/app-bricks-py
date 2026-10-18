@@ -18,6 +18,7 @@ class ErrorCode(StrEnum):
     BAD_REQUEST = "bad_request"
     NOT_FOUND = "not_found"
     UNSUPPORTED = "unsupported"
+    FORBIDDEN = "forbidden"
     BUSY = "busy"
     PREPARE_FAILED = "prepare_failed"
     INTERNAL = "internal"
