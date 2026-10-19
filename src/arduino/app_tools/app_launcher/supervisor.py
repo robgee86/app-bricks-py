@@ -344,10 +344,12 @@ class Supervisor:
         self._link_app(app)
 
         # The home last: the launcher decides it, whatever the request carries
-        env = {**os.environ, **request.env, "HOME": self._provision_home(app)}
+        home = self._provision_home(app)
+        env = {**os.environ, **request.env, "HOME": home}
         log = self._open_log(app)
         started = time.monotonic()
-        prepared = await self._prepare(app, env, log)
+        # The preparation gets the launcher's own environment: nothing of the request's reaches a process before it is confined
+        prepared = await self._prepare(app, {**os.environ, "HOME": home}, log)
         prepare_ms = _ms_since(started)
 
         started = time.monotonic()
