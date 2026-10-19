@@ -60,7 +60,7 @@ fi
 mkdir -p "$APP_DIR/.cache/.venv/bin"
 ln -sf "{python}" "$APP_DIR/.cache/.venv/bin/python"
 echo prepared >> "$APP_DIR/prepared.marker"
-echo "prepared at home $HOME"
+echo "prepared at home $HOME with PLANTED=${{PLANTED:-nothing}}"
 """
 
 
@@ -331,11 +331,12 @@ def test_prepares_an_app_with_dependencies_when_they_change(launcher):
     app = launcher.app("deps")
     requirements = app / "python" / "requirements.txt"
     requirements.write_text("requests\n")
-    first = launcher.request({"cmd": "start", "app": str(app)})
+    # The request environment reaches the app, never the preparation, which runs before any confinement
+    first = launcher.request({"cmd": "start", "app": str(app), "env": {"PLANTED": "by the request"}})
     assert (first["ok"], first["prepared"], first["warm"]) == (True, True, False)
     assert first["timings"]["prepare_ms"] > 0
     assert log_of(app, until="hello from").startswith(
-        f"installing {requirements}\nprepared at home {app}/.cache/home\nhello from __main__ {app}/python/main.py"
+        f"installing {requirements}\nprepared at home {app}/.cache/home with PLANTED=nothing\nhello from __main__ {app}/python/main.py"
     )
     assert (app / ".cache" / "launcher" / "prepared.sha").exists()
 

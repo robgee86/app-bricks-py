@@ -71,7 +71,7 @@ class Policy:
 
     @classmethod
     def for_app(cls, app: str, ports: Iterable[int], env: Mapping[str, str]) -> "Policy":
-        """The policy of an app: the runtime, plus the models folder to read and its own home and the runtime folder to write."""
+        """The policy of an app: the runtime, plus the models folder to read and the runtime folder to write, from the launcher's environment."""
         read_only = RUNTIME_READ_ONLY + tuple(filter(None, [env.get("MODELS_PATH")]))
         read_write = RUNTIME_READ_WRITE + tuple(filter(None, [env.get("HOME"), env.get("XDG_RUNTIME_DIR")]))
         return cls(app=os.path.abspath(app), ports=tuple(ports), read_only=read_only, read_write=read_write)

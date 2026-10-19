@@ -112,13 +112,15 @@ def run(launch: Launch) -> int:
     Raises:
         SystemExit: when the app exits through sys.exit(), as it would in its own interpreter.
     """
+    # The policy comes from the launcher's environment, before the app's replaces it
+    policy = confinement.Policy.for_app(launch.app, launch.ports, os.environ) if launch.confine else None
     env = environment(launch)
     os.environ.clear()
     os.environ.update(env)
     os.chdir(launch.app)
-    if launch.confine:
+    if policy is not None:
         # Binds this thread and all it creates: the supervisor forks only while it is the sole thread, so the app inherits it whole
-        confinement.apply(confinement.Policy.for_app(launch.app, launch.ports, env))
+        confinement.apply(policy)
     argv = launch.exec_argv
     if argv is not None:
         os.execve(argv[0], argv, env)
