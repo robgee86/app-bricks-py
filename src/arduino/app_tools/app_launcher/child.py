@@ -112,6 +112,7 @@ def run(launch: Launch) -> int:
     Raises:
         SystemExit: when the app exits through sys.exit(), as it would in its own interpreter.
     """
+    reseed()
     # The policy comes from the launcher's environment, before the app's replaces it
     policy = confinement.Policy.for_app(launch.app, launch.ports, os.environ) if launch.confine else None
     env = environment(launch)
@@ -129,6 +130,12 @@ def run(launch: Launch) -> int:
     sys.path[0] = os.path.dirname(launch.main_py)
     sys.path[1:1] = [path for path in env.get("PYTHONPATH", "").split(os.pathsep) if path and path not in sys.path]
     return _exec_main(launch.main_py)
+
+
+def reseed() -> None:
+    """Reseeds what the warm interpreter seeded once and fork copied: NumPy's global generator; Python's random reseeds itself."""
+    if (numpy := sys.modules.get("numpy")) is not None:
+        numpy.random.seed()
 
 
 def _open_fds() -> list[int]:
