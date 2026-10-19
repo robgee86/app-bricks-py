@@ -6,7 +6,7 @@
 
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
@@ -41,7 +41,6 @@ class Mode(StrEnum):
 @dataclass(frozen=True)
 class Start:
     app: str
-    env: dict[str, str] = field(default_factory=dict[str, str])
     mode: Mode = Mode.REPLACE
     ports: tuple[int, ...] = ()
     """The TCP ports the app may bind, the ones it declares."""
@@ -91,10 +90,12 @@ def decode_request(line: bytes) -> Request:
     except (UnicodeDecodeError, json.JSONDecodeError) as e:
         raise LauncherError(ErrorCode.BAD_REQUEST, f"invalid JSON: {e}") from None
     match message:
+        case {"cmd": "start", "env": _}:
+            # Never through the launcher process: what it read of one app would linger in the memory the next is forked from
+            raise LauncherError(ErrorCode.BAD_REQUEST, "env is not taken, the app environment is read from <app>/.cache/launcher/environment.json")
         case {"cmd": "start"}:
             return Start(
                 app=_app(message.get("app")),
-                env=_env(message.get("env", {})),
                 mode=_mode(message.get("mode", Mode.REPLACE)),
                 ports=_ports(message.get("ports", [])),
             )
@@ -123,21 +124,6 @@ def _app(value: object) -> str:
             return os.path.normpath(value)
         case _:
             raise LauncherError(ErrorCode.BAD_REQUEST, "app must be the absolute path of the app folder")
-
-
-def _env(value: object) -> dict[str, str]:
-    match value:
-        case dict():
-            env: dict[str, str] = {}
-            for item in value.items():
-                match item:
-                    case (str() as key, str() as text):
-                        env[key] = text
-                    case _:
-                        raise LauncherError(ErrorCode.BAD_REQUEST, "env values must be strings")
-            return env
-        case _:
-            raise LauncherError(ErrorCode.BAD_REQUEST, "env must be an object of strings")
 
 
 def _mode(value: object) -> Mode:

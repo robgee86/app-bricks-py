@@ -74,6 +74,11 @@ def test_environment_is_the_launch_one_unbuffered(tmp_path):
     assert env == {"HOME": "/home/app", "PYTHONUNBUFFERED": "1"}
 
 
+def test_environment_layers_the_app_own_variables_but_for_home(tmp_path):
+    env = environment(launch(tmp_path, {"HOME": "/apps/a/.cache/home", "PATH": "/usr/bin"}), {"HOME": "/elsewhere", "TOKEN": "t", "PATH": "/evil"})
+    assert env == {"HOME": "/apps/a/.cache/home", "PATH": "/evil", "TOKEN": "t", "PYTHONUNBUFFERED": "1"}
+
+
 def test_environment_adds_the_app_bricks_to_pythonpath(tmp_path):
     (tmp_path / "bricks").mkdir()
     env = environment(launch(tmp_path, {"PYTHONPATH": "/lib"}))

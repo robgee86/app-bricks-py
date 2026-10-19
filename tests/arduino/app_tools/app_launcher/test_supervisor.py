@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from arduino.app_tools.app_launcher import client, confinement
+from arduino.app_tools.app_launcher import appenv, client, confinement
 from arduino.app_tools.app_launcher.supervisor import _descends_from
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="the launcher forks, POSIX only")
@@ -175,11 +175,14 @@ class Launcher:
     def request(self, message):
         return client.request(message, self.socket, timeout_s=10)
 
-    def app(self, name, app_yaml=""):
+    def app(self, name, app_yaml="", env=None):
+        """An app folder, with the environment file the daemon would write when `env` is given."""
         app = self.apps / name
         (app / "python").mkdir(parents=True)
         (app / "python" / "main.py").write_text(FAKE_MAIN)
         (app / "app.yaml").write_text(app_yaml)
+        if env is not None:
+            appenv.write(str(app), env)
         return app
 
     def close(self):
@@ -219,8 +222,8 @@ def log_of(app, until=""):
 
 
 def test_runs_an_app_until_stopped(launcher):
-    app = launcher.app("hello")
-    started = launcher.request({"cmd": "start", "app": str(app), "env": {"GREETING": "hi"}, "mode": "replace"})
+    app = launcher.app("hello", env={"GREETING": "hi"})
+    started = launcher.request({"cmd": "start", "app": str(app), "mode": "replace"})
     assert started["ok"] and started["warm"] and started["runner"] == "python" and not started["prepared"]
     assert set(started["timings"]) == {"stop_ms", "prepare_ms", "fork_ms"}
 
@@ -275,13 +278,13 @@ def test_the_alias_goes_away_when_the_last_app_dies_on_its_own(launcher):
 def test_a_link_planted_as_the_log_carries_no_write(launcher):
     victim = launcher.root / "precious.txt"
     victim.write_text("precious\n")
-    app = launcher.app("log-planting")
+    app = launcher.app("log-planting", env={"VICTIM": str(victim)})
     (app / "python" / "main.py").write_text(LOG_PLANTING_MAIN)
-    assert launcher.request({"cmd": "start", "app": str(app), "env": {"VICTIM": str(victim)}})["ok"]
+    assert launcher.request({"cmd": "start", "app": str(app)})["ok"]
     assert wait_until(lambda: launcher.request({"cmd": "status"})["children"] == [])
     assert (app / ".cache" / "logs" / "app.log").is_symlink()
 
-    assert launcher.request({"cmd": "start", "app": str(app), "env": {"VICTIM": str(victim)}})["ok"], "the app runs, its output dropped"
+    assert launcher.request({"cmd": "start", "app": str(app)})["ok"], "the app runs, its output dropped"
     assert wait_until(lambda: launcher.request({"cmd": "status"})["children"] == [])
     assert victim.read_text() == "precious\n"
     assert "Cannot write the log" in (launcher.root / "launcher.log").read_text()
@@ -368,11 +371,11 @@ def test_runs_streamlit_apps_through_streamlit_on_port_7000(launcher):
 
 
 def test_prepares_an_app_with_dependencies_when_they_change(launcher):
-    app = launcher.app("deps")
+    # The app's own environment reaches the app, never the preparation, which runs before any confinement
+    app = launcher.app("deps", env={"PLANTED": "by the app"})
     requirements = app / "python" / "requirements.txt"
     requirements.write_text("requests\n")
-    # The request environment reaches the app, never the preparation, which runs before any confinement
-    first = launcher.request({"cmd": "start", "app": str(app), "env": {"PLANTED": "by the request"}})
+    first = launcher.request({"cmd": "start", "app": str(app)})
     assert (first["ok"], first["prepared"], first["warm"]) == (True, True, False)
     assert first["timings"]["prepare_ms"] > 0
     assert log_of(app, until="hello from").startswith(
@@ -422,6 +425,13 @@ def test_refuses_what_is_not_an_app(launcher):
     assert launcher.request({"cmd": "start", "app": str(launcher.apps / "missing")})["error"]["code"] == "not_found"
     (launcher.apps / "empty").mkdir()
     assert launcher.request({"cmd": "start", "app": str(launcher.apps / "empty")})["error"]["code"] == "not_found"
+
+
+def test_takes_no_environment_in_the_request(launcher):
+    app = launcher.app("inline-env")
+    refused = launcher.request({"cmd": "start", "app": str(app), "env": {"GREETING": "hi"}})
+    assert refused["error"]["code"] == "bad_request" and "environment.json" in refused["error"]["message"]
+    assert launcher.request({"cmd": "status"})["children"] == []
 
 
 def test_a_peer_gone_before_the_check_counts_as_launched():

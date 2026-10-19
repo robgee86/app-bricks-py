@@ -15,7 +15,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
-from . import confinement, prepare
+from . import appenv, confinement, prepare
 
 STREAMLIT_PORT = 7000
 """The port Streamlit serves, the one run.sh always gave it."""
@@ -32,7 +32,7 @@ class Launch:
 
     app: str
     env: Mapping[str, str]
-    """The supervisor environment with the requested one on top."""
+    """The supervisor environment, HOME set to the app home; the app's own environment comes from its folder."""
     output_fd: int
     runner: Runner = Runner.PYTHON
     interpreter: str | None = None
@@ -76,9 +76,11 @@ def _venv_has_packages(app: str) -> bool:
     return False
 
 
-def environment(launch: Launch) -> dict[str, str]:
-    """Builds the app environment: the launch one and the run.sh additions."""
-    env = {**launch.env, "PYTHONUNBUFFERED": "1"}
+def environment(launch: Launch, own: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Builds the app environment: the launch one, the app's own on top but for HOME, and the run.sh additions."""
+    env = {**launch.env, **(own or {}), "PYTHONUNBUFFERED": "1"}
+    if "HOME" in launch.env:
+        env["HOME"] = launch.env["HOME"]
     bricks = os.path.join(launch.app, "bricks")
     if os.path.isdir(bricks):
         env["PYTHONPATH"] = os.pathsep.join(filter(None, [env.get("PYTHONPATH"), bricks]))
@@ -115,13 +117,14 @@ def run(launch: Launch) -> int:
     reseed()
     # The policy comes from the launcher's environment, before the app's replaces it
     policy = confinement.Policy.for_app(launch.app, launch.ports, os.environ) if launch.confine else None
-    env = environment(launch)
-    os.environ.clear()
-    os.environ.update(env)
     os.chdir(launch.app)
     if policy is not None:
         # Binds this thread and all it creates: the supervisor forks only while it is the sole thread, so the app inherits it whole
         confinement.apply(policy)
+    # The app's own environment is read confined: whatever is planted in its place leads nowhere out of the app folder
+    env = environment(launch, appenv.read(launch.app))
+    os.environ.clear()
+    os.environ.update(env)
     argv = launch.exec_argv
     if argv is not None:
         os.execve(argv[0], argv, env)
