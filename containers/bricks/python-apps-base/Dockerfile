@@ -10,8 +10,10 @@ FROM ${REGISTRY}app-bricks/python-base:${BASE_IMAGE_VERSION}
 ARG BASE_IMAGE_VERSION
 ENV BRICKS_RELEASE_VERSION=${BASE_IMAGE_VERSION}
 
-# Copy the Streamlit configuration file with customized settings in home app shared directory
-COPY ./streamlit/config.toml /home/app/.streamlit/config.toml
+# The skeleton of every app home, which the launcher mirrors into <app>/.cache/home: the Streamlit theme and the ALSA
+# wrappers only, none of Debian's shell defaults
+RUN rm -rf /etc/skel/.[!.]* /etc/skel/*
+COPY ./streamlit/config.toml /etc/skel/.streamlit/config.toml
 
 COPY ./scripts/*.sh /
 # The wheel and the lock it was built from, from the bake context filled by `task build:bricks`
@@ -37,8 +39,8 @@ RUN set -ex; \
         rm -rf /var/lib/apt/lists/* /var/lib/dpkg/*-old /tmp/patch_*.deb; \
     fi; \
     rm -rf /tmp/patches; \
-    # The ALSA dsnoop/dmix wrappers are static: generate them once here, not at every app start
-    HOME=/home/app bash /provision-alsa-devices.sh; \
+    # The ALSA dsnoop/dmix wrappers are static: generate them once here, into the skeleton
+    HOME=/etc/skel bash /provision-alsa-devices.sh; \
     # fix permissions for /home/app
     chown arduino:arduino -R /home/app; \
     chmod 777 -R /home/app; \

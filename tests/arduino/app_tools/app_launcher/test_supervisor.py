@@ -52,6 +52,7 @@ fi
 mkdir -p "$APP_DIR/.cache/.venv/bin"
 ln -sf "{python}" "$APP_DIR/.cache/.venv/bin/python"
 echo prepared >> "$APP_DIR/prepared.marker"
+echo "prepared at home $HOME"
 """
 
 
@@ -64,7 +65,7 @@ def landlock_abi():
 
 LANDLOCK = landlock_abi()
 
-# An app that peeks at a sibling app, binds its ports and reports what happened
+# An app that peeks at a sibling app and the launcher home, binds its ports and reports what happened
 PEEKING_MAIN = """
 import os, signal, socket, sys, tempfile
 def attempt(name, fn):
@@ -73,10 +74,13 @@ def attempt(name, fn):
     except OSError as e:
         print(name + ": denied " + e.strerror, flush=True)
 sibling = os.path.join(os.path.dirname(os.getcwd()), "hello")
+print("home:", os.environ["HOME"], flush=True)
 attempt("read sibling", lambda: open(os.path.join(sibling, "app.yaml")).read())
 attempt("list apps", lambda: os.listdir(os.path.dirname(os.getcwd())))
 attempt("read own", lambda: open("app.yaml").read())
 attempt("write tmp", lambda: tempfile.TemporaryFile().close())
+attempt("write home", lambda: open(os.path.join(os.environ["HOME"], "note"), "w").close())
+attempt("write launcher home", lambda: open(os.path.join(os.environ["LAUNCHER_HOME"], "note"), "w").close())
 attempt("bind 7000", lambda: socket.socket().bind(("127.0.0.1", 7000)))
 attempt("bind 7001", lambda: socket.socket().bind(("127.0.0.1", 7001)))
 attempt("bind ephemeral", lambda: socket.socket().bind(("127.0.0.1", 0)))
@@ -97,7 +101,7 @@ def short_folder(prefix="launcher", parent="/tmp"):
     return Path(tempfile.mkdtemp(prefix=prefix, dir=parent)).resolve()
 
 
-def spawn(root, preload="json", confinement=None):
+def spawn(root, preload="json", confinement=None, home=None):
     modules = root / "modules"
     (modules / "streamlit").mkdir(parents=True, exist_ok=True)
     (modules / "streamlit" / "__init__.py").touch()
@@ -108,8 +112,11 @@ def spawn(root, preload="json", confinement=None):
     # As in the image: the alias is a link to the link the launcher manages
     if not (root / "app").is_symlink():
         (root / "app").symlink_to(root / "current-app")
+    home = str(home or Path.home())
     env = {
         **os.environ,
+        "HOME": home,
+        "LAUNCHER_HOME": home,
         "PYTHONPATH": str(modules),
         "APP_LAUNCHER_PRELOAD": preload,
         "APP_LAUNCHER_SOCKET": str(root / "launcher.sock"),
@@ -132,9 +139,10 @@ class Launcher:
         self.root = root
         self.socket = str(root / "launcher.sock")
         self.app_link = root / "current-app"
-        # The apps live outside the folders a confined app may reach, /tmp among them, so that one app cannot see another
+        # The apps and the launcher home live outside the folders a confined app may reach, /tmp among them
         self.apps = short_folder("apps", "/var/tmp")
-        self.process = spawn(root, confinement=confinement)
+        self.home = short_folder("home", "/var/tmp")
+        self.process = spawn(root, confinement=confinement, home=self.home)
         wait_until(self.answers, details=lambda: (root / "launcher.log").read_text())
 
     def answers(self):
@@ -167,6 +175,7 @@ def launcher():
         launcher.close()
     shutil.rmtree(root)
     shutil.rmtree(launcher.apps)
+    shutil.rmtree(launcher.home)
 
 
 def gone(pid):
@@ -262,8 +271,10 @@ def test_confines_an_app_to_its_own_folder_and_ports(launcher):
     started = launcher.request({"cmd": "start", "app": str(app), "mode": "replace", "ports": [7000]})
     assert started["ok"] and started["confined"]
     log = log_of(app, until="bind ephemeral")
+    assert f"home: {app}/.cache/home" in log
     assert "read sibling: denied" in log and "list apps: denied" in log
     assert "read own: allowed" in log and "write tmp: allowed" in log
+    assert "write home: allowed" in log and "write launcher home: denied" in log
     assert "bind 7000: allowed" in log and "bind 7001: denied" in log and "bind ephemeral: allowed" in log
     assert launcher.request({"cmd": "status"})["confinement"] == {"required": True, "landlock_abi": LANDLOCK}
     launcher.request({"cmd": "stop"})
@@ -283,6 +294,7 @@ def test_starts_nothing_when_confinement_is_required_but_the_kernel_has_no_landl
         launcher.close()
         shutil.rmtree(root)
         shutil.rmtree(launcher.apps)
+        shutil.rmtree(launcher.home)
 
 
 def test_runs_streamlit_apps_through_streamlit_on_port_7000(launcher):
@@ -301,7 +313,9 @@ def test_prepares_an_app_with_dependencies_when_they_change(launcher):
     first = launcher.request({"cmd": "start", "app": str(app)})
     assert (first["ok"], first["prepared"], first["warm"]) == (True, True, False)
     assert first["timings"]["prepare_ms"] > 0
-    assert log_of(app, until="hello from").startswith(f"installing {requirements}\nhello from __main__ {app}/python/main.py")
+    assert log_of(app, until="hello from").startswith(
+        f"installing {requirements}\nprepared at home {app}/.cache/home\nhello from __main__ {app}/python/main.py"
+    )
     assert (app / ".cache" / "launcher" / "prepared.sha").exists()
 
     second = launcher.request({"cmd": "start", "app": str(app)})

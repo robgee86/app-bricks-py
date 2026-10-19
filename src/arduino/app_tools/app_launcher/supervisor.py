@@ -29,7 +29,7 @@ from typing import Any, NoReturn
 
 from arduino.version import __version__
 
-from . import child, confinement, prepare, protocol
+from . import child, confinement, home, prepare, protocol
 from .applog import CHUNK_BYTES, AppLog
 from .child import Launch, Runner
 from .protocol import ErrorCode, LauncherError, Mode, Ping, Request, Start, Status, Stop
@@ -338,7 +338,8 @@ class Supervisor:
         stop_ms = _ms_since(started)
         self._link_app(app)
 
-        env = {**os.environ, **request.env}
+        # The home last: the launcher decides it, whatever the request carries
+        env = {**os.environ, **request.env, "HOME": self._provision_home(app)}
         log = self._open_log(app)
         started = time.monotonic()
         prepared = await self._prepare(app, env, log)
@@ -369,6 +370,12 @@ class Supervisor:
             prepared=prepared,
             timings={"stop_ms": stop_ms, "prepare_ms": prepare_ms, "fork_ms": _ms_since(started)},
         )
+
+    def _provision_home(self, app: str) -> str:
+        try:
+            return home.provision(app)
+        except OSError as e:
+            raise LauncherError(ErrorCode.INTERNAL, f"cannot create the home of {app}: {e}") from None
 
     async def _prepare(self, app: str, env: Mapping[str, str], log: AppLog | None) -> bool:
         """Runs `run.sh prepare` when the app dependencies changed since the last success; returns whether it ran."""
