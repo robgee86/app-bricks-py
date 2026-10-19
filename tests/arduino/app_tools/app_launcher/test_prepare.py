@@ -104,7 +104,7 @@ async def run(app, script, timeout_s=5.0):
         reapers.append(loop.create_task(reap()))
         return exited
 
-    log = AppLog(str(app / ".cache" / "logs" / "app.log"))
+    log = AppLog(str(app))
     try:
         await prepare.run(str(app), {"PATH": os.environ["PATH"]}, script, timeout_s, log, watch, confine=False)
     finally:

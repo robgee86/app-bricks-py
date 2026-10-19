@@ -13,6 +13,8 @@ import logging
 import os
 from contextlib import suppress
 
+from . import folders
+
 logger = logging.getLogger("arduino.app_tools.app_launcher")
 
 DEFAULT_SKELETON = "/etc/skel"
@@ -28,30 +30,40 @@ def provision(app: str, skeleton: str = DEFAULT_SKELETON) -> str:
     """Creates the app home when missing and mirrors the skeleton into it; returns the home.
 
     Raises:
-        OSError: when the home cannot be created.
+        OSError: when the home cannot be created, a link planted in its place included.
     """
     home = path(app)
-    os.makedirs(home, exist_ok=True)
-    for folder, subfolders, files in os.walk(skeleton):
-        target = os.path.normpath(os.path.join(home, os.path.relpath(folder, skeleton)))
-        for name in [*subfolders, *files]:
-            entry = os.path.join(target, name)
-            try:
-                if name in files:
-                    _link(os.path.join(folder, name), entry)
-                else:
-                    os.makedirs(entry, exist_ok=True)
-            except OSError as e:
-                # An app may have replaced a skeleton entry with something else: its home, its problem
-                logger.warning(f"Cannot mirror the skeleton at {entry}: {e}")
+    home_fd = folders.open_folder(app, ".cache", "home")
+    try:
+        with suppress(FileNotFoundError):
+            _mirror(skeleton, home_fd)
+    finally:
+        os.close(home_fd)
     return home
 
 
-def _link(source: str, link: str) -> None:
-    if os.path.islink(link) and os.readlink(link) == source:
-        return
-    pending = f"{link}.{os.getpid()}"
+def _mirror(source: str, target_fd: int) -> None:
+    for entry in os.scandir(source):
+        try:
+            if entry.is_dir(follow_symlinks=False):
+                fd = folders.descend(target_fd, entry.name)
+                try:
+                    _mirror(entry.path, fd)
+                finally:
+                    os.close(fd)
+            else:
+                _link(entry.path, entry.name, target_fd)
+        except OSError as e:
+            # An app may have replaced a skeleton entry with something else: its home, its problem
+            logger.warning(f"Cannot mirror the skeleton entry {entry.name}: {e}")
+
+
+def _link(source: str, name: str, folder_fd: int) -> None:
+    with suppress(OSError):
+        if os.readlink(name, dir_fd=folder_fd) == source:
+            return
+    pending = f"{name}.{os.getpid()}"
     with suppress(FileNotFoundError):
-        os.unlink(pending)
-    os.symlink(source, pending)
-    os.replace(pending, link)
+        os.unlink(pending, dir_fd=folder_fd)
+    os.symlink(source, pending, dir_fd=folder_fd)
+    os.replace(pending, name, src_dir_fd=folder_fd, dst_dir_fd=folder_fd)

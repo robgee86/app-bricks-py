@@ -14,6 +14,7 @@ import signal
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 
+from . import folders
 from .applog import CHUNK_BYTES, AppLog
 from .protocol import ErrorCode, LauncherError
 
@@ -94,12 +95,15 @@ def record(app: str, current: str) -> None:
     Raises:
         OSError: when the record cannot be written.
     """
-    path = _record_path(app)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    temporary = f"{path}.{os.getpid()}.tmp"
-    with open(temporary, "w", encoding="ascii") as f:
-        f.write(f"{current}\n")
-    os.replace(temporary, path)
+    name = os.path.basename(_record_path(app))
+    temporary = f"{name}.{os.getpid()}.tmp"
+    folder = folders.open_folder(app, ".cache", "launcher")
+    try:
+        with os.fdopen(folders.open_file(folder, temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC), "w", encoding="ascii") as f:
+            f.write(f"{current}\n")
+        os.replace(temporary, name, src_dir_fd=folder, dst_dir_fd=folder)
+    finally:
+        os.close(folder)
 
 
 async def run(app: str, env: Mapping[str, str], run_sh: str, timeout_s: float, log: AppLog | None, watch: Watch, confine: bool = True) -> None:
