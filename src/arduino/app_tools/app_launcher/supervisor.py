@@ -343,13 +343,12 @@ class Supervisor:
         stop_ms = _ms_since(started)
         self._link_app(app)
 
-        # The home last: the launcher decides it, whatever the request carries
+        # The launcher's own environment and the home it decides: the app's own is read by the child once confined, never here
         home = self._provision_home(app)
-        env = {**os.environ, **request.env, "HOME": home}
+        env = {**os.environ, "HOME": home}
         log = self._open_log(app)
         started = time.monotonic()
-        # The preparation gets the launcher's own environment: nothing of the request's reaches a process before it is confined
-        prepared = await self._prepare(app, {**os.environ, "HOME": home}, log)
+        prepared = await self._prepare(app, env, log)
         prepare_ms = _ms_since(started)
 
         started = time.monotonic()

@@ -44,10 +44,10 @@ def descend(folder_fd: int, name: str) -> int:
     return os.open(name, FOLDER, dir_fd=folder_fd)
 
 
-def open_file(folder_fd: int, name: str, flags: int) -> int:
+def open_file(folder_fd: int, name: str, flags: int, mode: int = 0o644) -> int:
     """Opens the file `name` inside the open folder with the flags, refusing a link in its place; returns its descriptor.
 
     Raises:
         OSError: when a link stands in its place, or it cannot be opened.
     """
-    return os.open(name, flags | os.O_NOFOLLOW | os.O_CLOEXEC, 0o644, dir_fd=folder_fd)
+    return os.open(name, flags | os.O_NOFOLLOW | os.O_CLOEXEC, mode, dir_fd=folder_fd)
