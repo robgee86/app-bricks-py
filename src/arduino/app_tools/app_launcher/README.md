@@ -54,7 +54,7 @@ Before any app code runs, the child:
 
 1. becomes a session and process group leader;
 2. points every inherited fd above 2 at `/dev/null` and its stdout and stderr at the log pipe;
-3. gets back the signal dispositions the supervisor had after the preload, which are those of a fresh `python main.py`;
+3. gets back the signal dispositions the supervisor had after the preload, which are those of a fresh `python main.py`, and reseeds NumPy's global generator, which the fork copied from the warm interpreter;
 4. gets the supervisor's environment with the request's `env` on top, `HOME` set to the app's own home, see [The app home](#the-app-home), then `PYTHONUNBUFFERED=1`, and `<app>/bricks` on `PYTHONPATH` when it exists;
 5. moves to the app folder, confines itself to it, see [Confinement](#confinement), and sets `sys.argv` and `sys.path` as a fresh interpreter would;
 6. runs `python/main.py` as a permanent `__main__` module: a fresh module with the dunders of a script, not `runpy`, so the app's threads and atexit handlers keep seeing it. Uncaught exceptions go through `sys.excepthook` without the launcher frames, with exit code 1; `SystemExit` is honoured and the interpreter exits normally.

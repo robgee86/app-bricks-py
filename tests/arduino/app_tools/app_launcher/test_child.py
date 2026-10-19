@@ -7,7 +7,7 @@ import sys
 
 import pytest
 
-from arduino.app_tools.app_launcher.child import Launch, Runner, environment, runner, venv_interpreter
+from arduino.app_tools.app_launcher.child import Launch, Runner, environment, reseed, runner, venv_interpreter
 
 
 def launch(app, env, **fields):
@@ -85,3 +85,12 @@ def test_environment_activates_the_app_venv(tmp_path):
     env = environment(launch(tmp_path, {"PATH": "/usr/bin"}, interpreter=python))
     assert env["VIRTUAL_ENV"] == str(tmp_path / ".cache" / ".venv")
     assert env["PATH"] == os.pathsep.join([os.path.dirname(python), "/usr/bin"])
+
+
+def test_the_child_reseeds_numpy_global_generator():
+    numpy = pytest.importorskip("numpy")
+    numpy.random.seed(0)
+    inherited = numpy.random.random()
+    numpy.random.seed(0)
+    reseed()
+    assert numpy.random.random() != inherited
