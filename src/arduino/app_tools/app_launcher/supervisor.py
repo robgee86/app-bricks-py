@@ -182,6 +182,7 @@ class Supervisor:
         self._preparations: dict[int, _Preparation] = {}
         self._control: asyncio.Server | None = None
         self._fork_request: _ForkRequest | None = None
+        self._chunk = bytearray(CHUNK_BYTES)
         self._exiting = False
         self._exit_task: asyncio.Task[None] | None = None
         self._started = time.monotonic()
@@ -585,18 +586,20 @@ class Supervisor:
             return None
 
     def _relay_output(self, fd: int, log: AppLog | None) -> None:
+        # One reusable buffer, wiped after each write: no line of an app lingers in the heap the next app is forked from
         try:
-            data = os.read(fd, CHUNK_BYTES)
+            size = os.readv(fd, [self._chunk])
         except BlockingIOError:
             return
         except OSError:
-            data = b""
-        if data:
+            size = 0
+        if size:
             if log is not None:
                 try:
-                    log.write(data)
+                    log.write(memoryview(self._chunk)[:size])
                 except OSError as e:
                     logger.warning(f"Cannot write {log.path}: {e}")
+            self._chunk[:size] = bytes(size)
             return
         self._loop.remove_reader(fd)
         os.close(fd)
