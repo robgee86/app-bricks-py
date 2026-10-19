@@ -36,8 +36,8 @@ _SCOPE_ABSTRACT_UNIX_SOCKET, _SCOPE_SIGNAL = 1 << 0, 1 << 1
 
 READ_ONLY = FS_EXECUTE | FS_READ_FILE | FS_READ_DIR
 
-RUNTIME_READ_ONLY = ("/usr", "/lib", "/lib64", "/bin", "/sbin", "/etc", "/opt", "/sys", "/proc", "/run.sh")
-"""The image and the kernel views an app reads; run.sh is what the preparation runs."""
+RUNTIME_READ_ONLY = ("/usr", "/lib", "/lib64", "/bin", "/sbin", "/etc", "/opt", "/sys", "/proc", "/run.sh", "/home/app")
+"""The image and the kernel views an app reads; run.sh is what the preparation runs, /home/app the image home with its fonts."""
 RUNTIME_READ_WRITE = ("/dev", "/tmp")
 """Devices, with their ioctls, and the temporary folder. /dev/shm holds the semaphores of multiprocessing."""
 
@@ -71,7 +71,7 @@ class Policy:
 
     @classmethod
     def for_app(cls, app: str, ports: Iterable[int], env: Mapping[str, str]) -> "Policy":
-        """The policy of an app: the runtime, plus the models folder to read and the home and runtime folders to write."""
+        """The policy of an app: the runtime, plus the models folder to read and its own home and the runtime folder to write."""
         read_only = RUNTIME_READ_ONLY + tuple(filter(None, [env.get("MODELS_PATH")]))
         read_write = RUNTIME_READ_WRITE + tuple(filter(None, [env.get("HOME"), env.get("XDG_RUNTIME_DIR")]))
         return cls(app=os.path.abspath(app), ports=tuple(ports), read_only=read_only, read_write=read_write)

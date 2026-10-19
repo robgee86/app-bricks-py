@@ -28,10 +28,6 @@ if [ "${OPENCV_DEBUG:-0}" = "1" ]; then
 fi
 
 provision_devices() {
-  # The ALSA wrapped devices config is baked into the image: generate it only when
-  # missing, e.g. with another HOME
-  [ -f "$HOME/.asoundrc" ] || bash /provision-alsa-devices.sh
-
   # Merge the host DSP payload and yaml config into /usr/share/hexagon-dsp,
   # where the fastrpc client libraries look for them. The script ships with the
   # libraries in python-base. Best-effort: a failure here only means the DSP is

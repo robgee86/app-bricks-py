@@ -41,12 +41,7 @@ def test_asoundrc_does_not_depend_on_the_runtime_environment(tmp_path: Path):
     assert "pcm.plug_card_9_dev_4_spk" in baked
 
 
-def test_image_bakes_asoundrc_and_run_sh_regenerates_it_only_when_missing():
+def test_image_bakes_asoundrc_into_the_home_skeleton_and_run_sh_never_generates_it():
     dockerfile = (IMAGE_DIR / "Dockerfile").read_text()
-    assert "HOME=/home/app bash /provision-alsa-devices.sh" in dockerfile
-    assert dockerfile.index("provision-alsa-devices.sh") < dockerfile.index("chown arduino:arduino -R /home/app")
-
-    run_sh = RUN_SH.read_text()
-    assert '[ -f "$HOME/.asoundrc" ] || bash /provision-alsa-devices.sh' in run_sh
-    unconditional = [line for line in run_sh.splitlines() if line.strip() == "bash /provision-alsa-devices.sh"]
-    assert unconditional == []
+    assert "HOME=/etc/skel bash /provision-alsa-devices.sh" in dockerfile
+    assert "provision-alsa-devices.sh" not in RUN_SH.read_text()

@@ -43,7 +43,6 @@ def _run(app: Path, tmp_path: Path) -> list[str]:
         tool.chmod(0o755)
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
-    (home / ".asoundrc").write_text("# baked\n")  # As in the image: no ALSA provisioning at start
     log = tmp_path / "calls.log"
     log.write_text("")
     # Without the venv pytest itself runs in (`uv run` exports it): in the container nothing activates one
