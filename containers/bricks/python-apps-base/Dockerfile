@@ -57,7 +57,8 @@ RUN rmdir /app && ln -s /home/app/current-app /app
 
 USER arduino
 
-WORKDIR /home/app
+# The launcher runs from the root, a folder nothing writes, not from a home
+WORKDIR /
 
 ENV HOME=/home/app
 ENV USER=arduino

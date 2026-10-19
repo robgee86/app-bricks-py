@@ -129,7 +129,7 @@ def spawn(root, preload="json", confinement=None, home=None):
         "INHERITED": "yes",
     }
     output = open(root / "launcher.log", "wb")
-    process = subprocess.Popen([sys.executable, "-m", "arduino.app_tools.app_launcher"], env=env, stdout=output, stderr=subprocess.STDOUT)
+    process = subprocess.Popen([sys.executable, "-m", "arduino.app_tools.app_launcher"], cwd=root, env=env, stdout=output, stderr=subprocess.STDOUT)
     output.close()
     return process
 
@@ -325,6 +325,22 @@ def test_prepares_an_app_with_dependencies_when_they_change(launcher):
     requirements.write_text("requests==2.32.0\n")
     assert launcher.request({"cmd": "start", "app": str(app)})["prepared"]
     assert (app / "prepared.marker").read_text() == "prepared\nprepared\n"
+    launcher.request({"cmd": "stop"})
+
+
+@pytest.mark.skipif(LANDLOCK is None, reason="the preparation runs through the wrapper only when confined")
+def test_the_preparation_wrapper_imports_nothing_from_where_the_launcher_runs(launcher):
+    # A package planted in the launcher's working directory, named as the library: the wrapper must not pick it up
+    planted = launcher.root / "arduino"
+    planted.mkdir()
+    (planted / "__init__.py").write_text("raise RuntimeError('planted package imported')\n")
+    app = launcher.app("wrapped")
+    (app / "python" / "requirements.txt").write_text("requests\n")
+    try:
+        started = launcher.request({"cmd": "start", "app": str(app)})
+    finally:
+        shutil.rmtree(planted)
+    assert started["ok"] and started["prepared"], started
     launcher.request({"cmd": "stop"})
 
 
