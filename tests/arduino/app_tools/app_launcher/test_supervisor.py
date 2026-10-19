@@ -42,6 +42,18 @@ print("helper", helper.pid, flush=True)
 signal.pause()
 """
 
+# Apps that plant a link where the launcher writes, then exit: the next start must not write through it
+LOG_PLANTING_MAIN = """
+import os
+os.remove(".cache/logs/app.log")
+os.symlink(os.environ["VICTIM"], ".cache/logs/app.log")
+"""
+HOME_PLANTING_MAIN = """
+import os, shutil
+shutil.rmtree(".cache/home")
+os.symlink("/", ".cache/home")
+"""
+
 # Stands in for Streamlit: prints what `python -m streamlit` got
 FAKE_STREAMLIT = """
 import os, signal, sys
@@ -257,6 +269,33 @@ def test_the_alias_goes_away_when_the_last_app_dies_on_its_own(launcher):
     os.kill(started["pid"], signal.SIGKILL)
     assert wait_until(lambda: launcher.request({"cmd": "status"})["children"] == [])
     assert wait_until(lambda: not launcher.app_link.is_symlink())
+
+
+def test_a_link_planted_as_the_log_carries_no_write(launcher):
+    victim = launcher.root / "precious.txt"
+    victim.write_text("precious\n")
+    app = launcher.app("log-planting")
+    (app / "python" / "main.py").write_text(LOG_PLANTING_MAIN)
+    assert launcher.request({"cmd": "start", "app": str(app), "env": {"VICTIM": str(victim)}})["ok"]
+    assert wait_until(lambda: launcher.request({"cmd": "status"})["children"] == [])
+    assert (app / ".cache" / "logs" / "app.log").is_symlink()
+
+    assert launcher.request({"cmd": "start", "app": str(app), "env": {"VICTIM": str(victim)}})["ok"], "the app runs, its output dropped"
+    assert wait_until(lambda: launcher.request({"cmd": "status"})["children"] == [])
+    assert victim.read_text() == "precious\n"
+    assert "Cannot write the log" in (launcher.root / "launcher.log").read_text()
+
+
+def test_a_link_planted_as_the_home_refuses_the_start(launcher):
+    app = launcher.app("home-planting")
+    (app / "python" / "main.py").write_text(HOME_PLANTING_MAIN)
+    assert launcher.request({"cmd": "start", "app": str(app)})["ok"]
+    assert wait_until(lambda: launcher.request({"cmd": "status"})["children"] == [])
+    assert (app / ".cache" / "home").is_symlink()
+
+    refused = launcher.request({"cmd": "start", "app": str(app)})
+    assert refused["error"]["code"] == "internal" and "home" in refused["error"]["message"]
+    assert launcher.request({"cmd": "status"})["children"] == []
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="the launcher walks /proc, Linux only")

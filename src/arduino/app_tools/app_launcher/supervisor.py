@@ -580,7 +580,7 @@ class Supervisor:
     def _open_log(self, app: str) -> AppLog | None:
         # A start begins a new log: what the user reads after a refresh is this run only
         try:
-            return AppLog(os.path.join(app, ".cache", "logs", "app.log"), fresh=True)
+            return AppLog(app, fresh=True)
         except OSError as e:
             logger.warning(f"Cannot write the log of {app}, its output is dropped: {e}")
             return None

@@ -5,8 +5,8 @@
 """Confines an app process to its own folder and the runtime with Landlock, the kernel's unprivileged sandbox. Stdlib only.
 
 The process restricts itself, right before any app code runs: no capability, no profile loaded by root, nothing to undo. It
-is an allow-list: the app folder is read-write, the runtime folders are read-only, devices and the shared folders are
-read-write, everything else, the other apps above all, is out of reach. A later ruleset can only tighten it, and it follows
+is an allow-list: the app folder, its home included, is read-write, the runtime folders are read-only, devices and the
+shared folders are read-write, everything else, the other apps above all, is out of reach. A later ruleset can only tighten it, and it follows
 the process through exec and fork. What Landlock does not mediate: connecting to a Unix socket by its path, and on kernels
 before ABI 6 signals and abstract sockets.
 
@@ -73,7 +73,7 @@ class Policy:
     def for_app(cls, app: str, ports: Iterable[int], env: Mapping[str, str]) -> "Policy":
         """The policy of an app: the runtime, plus the models folder to read and the runtime folder to write, from the launcher's environment."""
         read_only = RUNTIME_READ_ONLY + tuple(filter(None, [env.get("MODELS_PATH")]))
-        read_write = RUNTIME_READ_WRITE + tuple(filter(None, [env.get("HOME"), env.get("XDG_RUNTIME_DIR")]))
+        read_write = RUNTIME_READ_WRITE + tuple(filter(None, [env.get("XDG_RUNTIME_DIR")]))
         return cls(app=os.path.abspath(app), ports=tuple(ports), read_only=read_only, read_write=read_write)
 
 
