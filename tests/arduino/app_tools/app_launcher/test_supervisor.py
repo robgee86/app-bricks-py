@@ -34,6 +34,14 @@ print("rogue got:", (done.stdout + done.stderr).strip(), flush=True)
 signal.pause()
 """
 
+# An app that leaves a helper behind in a session of its own, out of the app's process group
+LINGERING_MAIN = """
+import signal, subprocess, sys
+helper = subprocess.Popen([sys.executable, "-c", "import signal; signal.pause()"], start_new_session=True)
+print("helper", helper.pid, flush=True)
+signal.pause()
+"""
+
 # Stands in for Streamlit: prints what `python -m streamlit` got
 FAKE_STREAMLIT = """
 import os, signal, sys
@@ -249,6 +257,19 @@ def test_the_alias_goes_away_when_the_last_app_dies_on_its_own(launcher):
     os.kill(started["pid"], signal.SIGKILL)
     assert wait_until(lambda: launcher.request({"cmd": "status"})["children"] == [])
     assert wait_until(lambda: not launcher.app_link.is_symlink())
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="the launcher walks /proc, Linux only")
+def test_a_stop_kills_what_the_app_left_behind(launcher):
+    app = launcher.app("lingering")
+    (app / "python" / "main.py").write_text(LINGERING_MAIN)
+    started = launcher.request({"cmd": "start", "app": str(app), "mode": "replace"})
+    helper = int(log_of(app, until="helper").split()[1])
+    assert not gone(helper)
+
+    stopped = launcher.request({"cmd": "stop"})
+    assert stopped["stopped"][0]["pid"] == started["pid"]
+    assert wait_until(lambda: gone(helper)), "the helper, in a session of its own, outlived the app"
 
 
 @pytest.mark.skipif(not hasattr(socket, "SO_PEERCRED"), reason="the peer pid exists on Linux only")
