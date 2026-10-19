@@ -21,6 +21,7 @@ pytestmark = pytest.mark.skipif(sys.platform == "win32" or shutil.which("sh") is
 FAKE_TOOLS = {
     "uv": """#!/bin/sh
 echo "uv $*" >> "$FAKE_LOG"
+echo "uv-env UV_NO_CONFIG=${UV_NO_CONFIG:-unset} PYTHONNOUSERSITE=${PYTHONNOUSERSITE:-unset}" >> "$FAKE_LOG"
 if [ "$1" = venv ]; then mkdir -p "$2/bin" && printf 'export VIRTUAL_ENV=%s\\n' "$2" > "$2/bin/activate"; fi
 if [ "$1" = pip ] && [ "$2" = show ]; then exit 1; fi
 """,
@@ -93,6 +94,12 @@ def test_requirements_get_a_venv_and_are_installed_in_it(tmp_path: Path):
     assert _venv_created(app, calls), calls
     assert any(c.startswith("uv pip install") and c.endswith("python/requirements.txt") for c in calls), calls
     assert calls[-1] == _sources_checked(app, f"{app}/.cache/.venv")
+
+
+def test_installs_follow_no_configuration_file_and_no_user_site(tmp_path: Path):
+    app = _app(tmp_path, {"python/requirements.txt": "requests\n"})
+    calls = _run(app, tmp_path)
+    assert "uv-env UV_NO_CONFIG=1 PYTHONNOUSERSITE=1" in calls, calls
 
 
 def test_a_requirements_file_with_only_blank_lines_needs_no_venv(tmp_path: Path):

@@ -113,7 +113,8 @@ async def run(app: str, env: Mapping[str, str], run_sh: str, timeout_s: float, l
     """
     argv = [run_sh, "prepare"]
     if confine:
-        argv = [sys.executable, "-m", "arduino.app_tools.app_launcher.confinement", "--app", app, "--", *argv]
+        # Isolated: the wrapper imports from the image only, nothing from its working directory, the environment or a user site
+        argv = [sys.executable, "-I", "-m", "arduino.app_tools.app_launcher.confinement", "--app", app, "--", *argv]
     output_fd, input_fd = os.pipe()
     try:
         # posix_spawn, not a subprocess helper: only the supervisor reaper waits for its processes

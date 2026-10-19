@@ -20,6 +20,10 @@ if [ -z "$PYTHONUNBUFFERED" ]; then
   export PYTHONUNBUFFERED=1
 fi
 
+# No user site-packages: the launcher, the apps and their venvs import from the
+# image and the app venv only, never from what a home holds
+export PYTHONNOUSERSITE=1
+
 if [ "${OPENCV_DEBUG:-0}" = "1" ]; then
   export OPENCV_LOG_LEVEL="${OPENCV_LOG_LEVEL:-DEBUG}"
   export OPENCV_VIDEOIO_DEBUG="${OPENCV_VIDEOIO_DEBUG:-1}"
@@ -64,6 +68,9 @@ DEPS_FAILED=0
 DEPS_INSTALLED=0
 
 export UV_CACHE_DIR="$CACHE_DIR/uv"
+# The installs follow this script and the image environment only, no uv.toml or
+# pyproject.toml found in the app folder or the home steers them
+export UV_NO_CONFIG=1
 
 # Remove core dumps left in the app directory by a previous run, unless they
 # are explicitly wanted
