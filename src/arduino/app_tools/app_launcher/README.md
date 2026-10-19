@@ -19,7 +19,7 @@ arduino-app-launcher [--socket PATH] ping | status | start <app> [--env K=V ...]
 
 A Unix socket at `APP_LAUNCHER_SOCKET`, mode 0660. One JSON object per line, one request per connection, then the response and the connection closes. Lifecycle requests (`start`, `stop`) run one at a time; `status` and `ping` answer immediately.
 
-A request from a process the launcher itself spawned, an app or anything an app left behind, is refused with `forbidden`: the peer's pid, which the kernel attaches to the connection, descends from the launcher. The daemon and the CLI connect from outside the container's pid namespace, where that pid reads 0, and a `docker exec` client, the health check, descends from outside too. On macOS, where no peer pid exists, nothing is refused.
+A request from a process the launcher itself spawned, an app or anything an app left behind, is refused with `forbidden`: the peer's pid, which the kernel attaches to the connection, descends from the launcher. The daemon and the CLI connect from outside the container's pid namespace, where that pid reads 0, and a `docker exec` client, the health check, descends from outside too. A peer gone before the check runs is refused as well: the pid is the one that connected, and a process of an app could hand the connection down and exit. On macOS, where no peer pid exists, nothing is refused.
 
 | Request | Response |
 |---|---|
