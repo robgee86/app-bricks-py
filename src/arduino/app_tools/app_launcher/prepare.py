@@ -97,7 +97,7 @@ def record(app: str, current: str) -> None:
     """
     name = os.path.basename(_record_path(app))
     temporary = f"{name}.{os.getpid()}.tmp"
-    folder = folders.open_folder(app, ".cache", "launcher")
+    folder = folders.open_folder(app, ".cache")
     try:
         with os.fdopen(folders.open_file(folder, temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC), "w", encoding="ascii") as f:
             f.write(f"{current}\n")
@@ -156,7 +156,7 @@ async def run(app: str, env: Mapping[str, str], run_sh: str, timeout_s: float, l
 
 
 def _record_path(app: str) -> str:
-    return os.path.join(app, ".cache", "launcher", "prepared.sha")
+    return os.path.join(app, ".cache", "prepared.sha")
 
 
 async def _relay(fd: int, log: AppLog | None, tail: bytearray) -> None:

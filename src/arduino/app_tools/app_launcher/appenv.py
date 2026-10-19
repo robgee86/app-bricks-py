@@ -19,7 +19,7 @@ NAME = "environment.json"
 
 def path(app: str) -> str:
     """The environment file of the app, a JSON object of strings."""
-    return os.path.join(app, ".cache", "launcher", NAME)
+    return os.path.join(app, ".cache", NAME)
 
 
 def read(app: str) -> dict[str, str]:
@@ -29,7 +29,7 @@ def read(app: str) -> dict[str, str]:
         OSError: when the file cannot be opened, a link in its place included.
         ValueError: when the file does not hold an object of strings.
     """
-    folder_fd = folders.open_folder(app, ".cache", "launcher")
+    folder_fd = folders.open_folder(app, ".cache")
     try:
         try:
             fd = folders.open_file(folder_fd, NAME, os.O_RDONLY)
@@ -47,7 +47,7 @@ def write(app: str, env: Mapping[str, str]) -> None:
     Raises:
         OSError: when the file cannot be written, a link on the way included.
     """
-    folder_fd = folders.open_folder(app, ".cache", "launcher")
+    folder_fd = folders.open_folder(app, ".cache")
     try:
         pending = f"{NAME}.{os.getpid()}"
         fd = folders.open_file(folder_fd, pending, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode=0o600)

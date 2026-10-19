@@ -78,7 +78,7 @@ def test_an_app_is_prepared_until_its_fingerprint_is_recorded_with_a_venv(tmp_pa
     venv(tmp_path)
     assert not prepare.needs_preparation(app, "abc")
     assert prepare.needs_preparation(app, "def")
-    assert (tmp_path / ".cache" / "launcher" / "prepared.sha").read_text() == "abc\n"
+    assert (tmp_path / ".cache" / "prepared.sha").read_text() == "abc\n"
 
 
 def run_sh(tmp_path, body):

@@ -381,7 +381,7 @@ def test_prepares_an_app_with_dependencies_when_they_change(launcher):
     assert log_of(app, until="hello from").startswith(
         f"installing {requirements}\nprepared at home {app}/.cache/home with PLANTED=nothing\nhello from __main__ {app}/python/main.py"
     )
-    assert (app / ".cache" / "launcher" / "prepared.sha").exists()
+    assert (app / ".cache" / "prepared.sha").exists()
 
     second = launcher.request({"cmd": "start", "app": str(app)})
     assert (second["ok"], second["prepared"], second["warm"]) == (True, False, False)
@@ -416,7 +416,7 @@ def test_a_failing_preparation_starts_nothing(launcher):
     assert failed["error"]["code"] == "prepare_failed"
     assert failed["error"]["message"].endswith(":\ninstalling " + f"{app}/python/requirements.txt\nNo solution found for missing-package")
     assert launcher.request({"cmd": "status"})["children"] == []
-    assert not (app / ".cache" / "launcher" / "prepared.sha").exists()
+    assert not (app / ".cache" / "prepared.sha").exists()
     assert log_of(app).endswith("No solution found for missing-package\n")
 
 

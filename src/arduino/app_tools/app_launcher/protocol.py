@@ -92,7 +92,7 @@ def decode_request(line: bytes) -> Request:
     match message:
         case {"cmd": "start", "env": _}:
             # Never through the launcher process: what it read of one app would linger in the memory the next is forked from
-            raise LauncherError(ErrorCode.BAD_REQUEST, "env is not taken, the app environment is read from <app>/.cache/launcher/environment.json")
+            raise LauncherError(ErrorCode.BAD_REQUEST, "env is not taken, the app environment is read from <app>/.cache/environment.json")
         case {"cmd": "start"}:
             return Start(
                 app=_app(message.get("app")),
