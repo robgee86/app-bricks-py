@@ -9,6 +9,7 @@ between two runs of the loop, never inside a callback, so the child never unwind
 """
 
 import asyncio
+import ctypes
 import gc
 import importlib
 import logging
@@ -49,6 +50,9 @@ DEFAULT_APP_ALIAS = "/app"
 """The path that names the running app for compatibility: in the image, a link to the link the launcher points at the app."""
 REQUEST_TIMEOUT_S = 5.0
 HANDLED_SIGNALS = (signal.SIGTERM, signal.SIGINT, signal.SIGCHLD)
+STRAY_SWEEPS = 5
+"""How many times a sweep lists and kills what a stopped app left behind, for a leftover forking in between."""
+_PR_SET_CHILD_SUBREAPER = 36
 
 SignalHandler = Callable[[int, FrameType | None], Any] | int | signal.Handlers | None
 
@@ -191,6 +195,7 @@ class Supervisor:
         self._loop.add_signal_handler(signal.SIGTERM, self._request_exit, "SIGTERM")
         self._loop.add_signal_handler(signal.SIGINT, self._request_exit, "SIGINT")
         self._loop.add_signal_handler(signal.SIGCHLD, self._reap)
+        _adopt_orphans()
         self._loop.run_until_complete(self._open())
         self._log_ready()
         while True:
@@ -528,6 +533,7 @@ class Supervisor:
             if pid == 0:
                 return
             if (preparation := self._preparations.pop(pid, None)) is not None:
+                self._kill_strays()
                 if not preparation.exited.done():
                     preparation.exited.set_result(status)
                 continue
@@ -540,10 +546,32 @@ class Supervisor:
             # What the app left behind dies with it, as in a container whose main process ends
             with suppress(ProcessLookupError, PermissionError):
                 os.killpg(pid, signal.SIGKILL)
+            self._kill_strays()
             fields = _exit_fields(status)
             how = f"was killed by signal {fields['signal']}" if fields["signal"] is not None else f"exited with code {fields['exit_code']}"
             logger.info(f"{reaped.app} (pid {pid}) {how}")
             reaped.exited.set_result(status)
+
+    def _kill_strays(self) -> None:
+        """Kills what a stopped app or preparation left behind, a helper in a session of its own included.
+
+        Orphans reparent to the launcher, a subreaper, so every process of an app descends from it as long as it lives: all
+        that descend and belong to no running app or preparation are killed, listed again for the ones forked meanwhile.
+        """
+        if not os.path.isdir("/proc"):
+            return
+        keep = {c.pid for c in self._children.values()} | set(self._preparations)
+        killed: set[int] = set()
+        for _ in range(STRAY_SWEEPS):
+            strays = [pid for pid in _descendants(os.getpid()) if not any(_descends_from(pid, kept) for kept in keep)]
+            if not strays:
+                break
+            for pid in strays:
+                with suppress(ProcessLookupError, PermissionError):
+                    os.kill(pid, signal.SIGKILL)
+            killed.update(strays)
+        if killed:
+            logger.info(f"Killed what was left behind: pids {sorted(killed)}")
 
     # App output
 
@@ -598,15 +626,48 @@ def _descends_from(pid: int, ancestor: int) -> bool:
     return pid == ancestor
 
 
+def _descendants(ancestor: int) -> list[int]:
+    """The live processes descending from the ancestor, from /proc; the exited ones only wait for their reaping."""
+    return [pid for pid in _pids() if pid != ancestor and _descends_from(pid, ancestor) and not _exited(pid)]
+
+
+def _pids() -> list[int]:
+    try:
+        return [int(name) for name in os.listdir("/proc") if name.isdigit()]
+    except OSError:
+        return []
+
+
 def _parent_pid(pid: int) -> int:
+    try:
+        return int(_status_field(pid, "PPid"))
+    except ValueError:
+        return 0
+
+
+def _exited(pid: int) -> bool:
+    return _status_field(pid, "State").startswith("Z")
+
+
+def _status_field(pid: int, field: str) -> str:
+    """A field of /proc/<pid>/status, empty when the process is gone."""
     try:
         with open(f"/proc/{pid}/status", encoding="utf-8") as status:
             for line in status:
-                if line.startswith("PPid:"):
-                    return int(line.split()[1])
-    except (OSError, ValueError):
+                if line.startswith(f"{field}:"):
+                    return line.partition(":")[2].strip()
+    except OSError:
         pass
-    return 0
+    return ""
+
+
+def _adopt_orphans() -> None:
+    """Makes the launcher the parent of every process its apps orphan, as PID 1 of a container is: Linux only."""
+    if sys.platform != "linux":
+        return
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(_PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
+        logger.warning(f"Cannot adopt the orphans of the apps: {os.strerror(ctypes.get_errno())}")
 
 
 async def _read_request(reader: asyncio.StreamReader) -> Request:
