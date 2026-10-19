@@ -609,7 +609,8 @@ def _refuse_launched_peer(writer: asyncio.StreamWriter) -> None:
     """Refuses a client the launcher itself spawned: an app, however far down, must not drive the launcher.
 
     The daemon and the CLI connect from outside the container's pid namespace, where the kernel reports their pid as 0,
-    and a `docker exec` client descends from outside too. macOS reports no peer pid: development only, nothing is refused.
+    and a `docker exec` client descends from outside too. A peer gone before the check is refused: it may have handed the
+    connection down before exiting. macOS reports no peer pid: development only, nothing is refused.
     """
     if not hasattr(socket, "SO_PEERCRED"):
         return
@@ -621,16 +622,22 @@ def _refuse_launched_peer(writer: asyncio.StreamWriter) -> None:
         raise LauncherError(ErrorCode.FORBIDDEN, f"requests from the processes of an app are refused (pid {pid})")
 
 
-def _descends_from(pid: int, ancestor: int) -> bool:
-    """Whether the process descends from the ancestor, following the parents in /proc; pid 0 is outside this pid namespace."""
+def _descends_from(pid: int, ancestor: int, *, vanished: bool = True) -> bool:
+    """Whether the process descends from the ancestor, following the parents in /proc; pid 0 is outside this pid namespace.
+
+    A process gone before the walk reaches it is answered `vanished`: nothing proves it was not one of ours.
+    """
     while pid > 0 and pid != ancestor:
-        pid = _parent_pid(pid)
+        parent = _parent_pid(pid)
+        if parent is None:
+            return vanished
+        pid = parent
     return pid == ancestor
 
 
 def _descendants(ancestor: int) -> list[int]:
     """The live processes descending from the ancestor, from /proc; the exited ones only wait for their reaping."""
-    return [pid for pid in _pids() if pid != ancestor and _descends_from(pid, ancestor) and not _exited(pid)]
+    return [pid for pid in _pids() if pid != ancestor and _descends_from(pid, ancestor, vanished=False) and not _exited(pid)]
 
 
 def _pids() -> list[int]:
@@ -640,11 +647,12 @@ def _pids() -> list[int]:
         return []
 
 
-def _parent_pid(pid: int) -> int:
+def _parent_pid(pid: int) -> int | None:
+    """The parent of the process, 0 when it is outside this pid namespace, None when the process is gone."""
     try:
         return int(_status_field(pid, "PPid"))
     except ValueError:
-        return 0
+        return None
 
 
 def _exited(pid: int) -> bool:

@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from arduino.app_tools.app_launcher import client, confinement
+from arduino.app_tools.app_launcher.supervisor import _descends_from
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="the launcher forks, POSIX only")
 
@@ -421,6 +422,13 @@ def test_refuses_what_is_not_an_app(launcher):
     assert launcher.request({"cmd": "start", "app": str(launcher.apps / "missing")})["error"]["code"] == "not_found"
     (launcher.apps / "empty").mkdir()
     assert launcher.request({"cmd": "start", "app": str(launcher.apps / "empty")})["error"]["code"] == "not_found"
+
+
+def test_a_peer_gone_before_the_check_counts_as_launched():
+    gone = next(pid for pid in range(2**22 - 1, 2**22 - 10000, -1) if not os.path.exists(f"/proc/{pid}"))
+    assert _descends_from(gone, os.getpid()), "nothing proves it was not one of ours"
+    assert not _descends_from(gone, os.getpid(), vanished=False), "a sweep kills only what still exists"
+    assert _descends_from(os.getpid(), os.getpid())
 
 
 def test_the_client_prints_the_response(launcher, capsys):
