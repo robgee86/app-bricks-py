@@ -51,7 +51,7 @@ class AppLog:
         flags = os.O_WRONLY | os.O_CREAT | (os.O_TRUNC if truncate else os.O_APPEND)
         return os.fdopen(folders.open_file(self._folder, NAME, flags), "wb", buffering=0)
 
-    def write(self, data: bytes) -> None:
+    def write(self, data: bytes | memoryview) -> None:
         """Appends data, rotating first when it would exceed the size limit."""
         if self._size and self._size + len(data) > self._max_bytes:
             self._file.close()
