@@ -43,8 +43,9 @@ class Launch:
 
     @property
     def exec_argv(self) -> list[str] | None:
-        """The command the child execs, None when it runs main.py warm in this process."""
-        if self.runner is Runner.STREAMLIT:
+        """The command the child execs, None when it runs the app warm in this process: main.py, or Streamlit on it when
+        this process is the app venv, where Streamlit is installed."""
+        if self.runner is Runner.STREAMLIT and (self.interpreter or not in_venv(prepare.venv_dir(self.app))):
             return [self.interpreter or sys.executable, "-m", "streamlit", "run", "--server.port", str(STREAMLIT_PORT), self.main_py]
         if self.interpreter:
             return [self.interpreter, self.main_py]
@@ -57,9 +58,17 @@ def runner(app: str) -> Runner:
 
 
 def venv_interpreter(app: str) -> str | None:
-    """Returns the interpreter of the app venv when the app has dependencies of its own, None when the image is enough."""
+    """Returns the interpreter of the app venv when the app has dependencies of its own and this process is not running
+    in that venv already, None when the image is enough or the venv is the one the fork inherits."""
     python = prepare.venv_python(app)
-    return python if os.path.exists(python) and (prepare.dependencies(app) or _venv_has_packages(app)) else None
+    if not os.path.exists(python) or not (prepare.dependencies(app) or _venv_has_packages(app)):
+        return None
+    return None if in_venv(prepare.venv_dir(app)) else python
+
+
+def in_venv(venv: str) -> bool:
+    """Tells whether this interpreter runs in the venv: a venv python puts its folder in sys.prefix."""
+    return sys.prefix != sys.base_prefix and os.path.realpath(sys.prefix) == os.path.realpath(venv)
 
 
 def _venv_has_packages(app: str) -> bool:
@@ -77,8 +86,9 @@ def environment(launch: Launch) -> dict[str, str]:
     bricks = os.path.join(launch.app, "bricks")
     if os.path.isdir(bricks):
         env["PYTHONPATH"] = os.pathsep.join(filter(None, [env.get("PYTHONPATH"), bricks]))
-    if launch.interpreter:
-        venv = os.path.dirname(os.path.dirname(launch.interpreter))
+    # The app venv, whether the child execs its interpreter or this process runs in it already
+    venv = prepare.venv_dir(launch.app) if launch.interpreter or in_venv(prepare.venv_dir(launch.app)) else None
+    if venv:
         env["VIRTUAL_ENV"] = venv
         env["PATH"] = os.pathsep.join(filter(None, [os.path.join(venv, "bin"), env.get("PATH")]))
     return env
@@ -116,7 +126,19 @@ def run(launch: Launch) -> int:
     # As a fresh interpreter: the script folder first, then PYTHONPATH
     sys.path[0] = os.path.dirname(launch.main_py)
     sys.path[1:1] = [path for path in env.get("PYTHONPATH", "").split(os.pathsep) if path and path not in sys.path]
+    if launch.runner is Runner.STREAMLIT:
+        return _run_streamlit(launch.main_py)
     return _exec_main(launch.main_py)
+
+
+def _run_streamlit(main_py: str) -> int:
+    """Serves main.py with the Streamlit of this interpreter, as `streamlit run --server.port 7000 main.py` does."""
+    from streamlit.web import bootstrap  # noqa: PLC0415 # pyright: ignore[reportMissingImports]
+
+    flags = {"server.port": STREAMLIT_PORT}
+    bootstrap.load_config_options(flag_options=flags)
+    bootstrap.run(main_py, False, [], flags)
+    return 0
 
 
 def reseed() -> None:

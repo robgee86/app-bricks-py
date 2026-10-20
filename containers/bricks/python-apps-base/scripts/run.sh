@@ -41,6 +41,10 @@ case "${1:-serve}" in
   serve)
     # Once per container, before the launcher forks its app
     provision_devices
+    # The app of this container has a venv of its own: the launcher runs in it, so the fork inherits its packages
+    if [ -n "$APP_DIR" ] && [ -x "$APP_DIR/.cache/.venv/bin/python" ]; then
+      exec "$APP_DIR/.cache/.venv/bin/python" -m arduino.app_tools.app_launcher
+    fi
     exec arduino-app-launcher
     ;;
   prepare)

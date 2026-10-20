@@ -63,6 +63,7 @@ def test_streamlit_apps_are_exec_d_through_streamlit(tmp_path):
     assert runner(str(tmp_path)) is Runner.STREAMLIT
     main_py = str(tmp_path / "python" / "main.py")
     streamlit = [sys.executable, "-m", "streamlit", "run", "--server.port", "7000"]
+    # This interpreter is not the app venv: Streamlit runs in a fresh one
     assert launch(tmp_path, {}, runner=Runner.STREAMLIT).exec_argv == [*streamlit, main_py]
     assert launch(tmp_path, {}, runner=Runner.STREAMLIT, interpreter="/venv/bin/python").exec_argv[0] == "/venv/bin/python"
     assert launch(tmp_path, {}, interpreter="/venv/bin/python").exec_argv == ["/venv/bin/python", main_py]

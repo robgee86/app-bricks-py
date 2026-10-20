@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import venv
 from pathlib import Path
 
 import pytest
@@ -38,6 +39,16 @@ FAKE_STREAMLIT = """
 import os, signal, sys
 print("streamlit", *sys.argv[1:], os.getcwd(), flush=True)
 signal.pause()
+"""
+
+# Stands in for streamlit.web.bootstrap, what a launcher in the app venv runs Streamlit through
+FAKE_BOOTSTRAP = """
+import os, signal, sys
+def load_config_options(flag_options):
+    print("streamlit options", sorted(flag_options.items()), flush=True)
+def run(main_script_path, is_hello, args, flag_options):
+    print("streamlit serves", main_script_path, is_hello, args, os.getcwd(), sys.prefix, flush=True)
+    signal.pause()
 """
 
 # Stands in for `run.sh prepare`: a venv on the test interpreter, a marker per run, a failure on request
@@ -109,6 +120,9 @@ class Launcher:
         (modules / "streamlit").mkdir(parents=True)
         (modules / "streamlit" / "__init__.py").touch()
         (modules / "streamlit" / "__main__.py").write_text(FAKE_STREAMLIT)
+        (modules / "streamlit" / "web").mkdir()
+        (modules / "streamlit" / "web" / "__init__.py").touch()
+        (modules / "streamlit" / "web" / "bootstrap.py").write_text(FAKE_BOOTSTRAP)
         for name, source in (extra_modules or {}).items():
             (modules / name).write_text(source)
         run_sh = self.root / "run.sh"
@@ -198,7 +212,7 @@ def test_runs_an_app_until_stopped(launcher):
     assert status["preload"]["modules"] == ["json"] and status["preload"]["failed"] == []
     # The preload runs once the launcher is idle
     wait_until(lambda: launcher.request({"cmd": "status"})["preload"]["loaded"] == ["json"])
-    assert set(status) == {"ok", "child", "preload", "version", "uptime_s"}
+    assert set(status) == {"ok", "child", "preload", "version", "uptime_s", "venv"}
 
     # The app writes to the container stdout and stderr, as the launcher does
     assert f"hello from __main__ {app}/python/main.py from the container yes\n" in launcher.output(until=f"{app}/python/main.py")
@@ -301,6 +315,54 @@ def test_prepares_an_app_with_dependencies_when_they_change(launcher):
     assert launcher.request({"cmd": "start", "app": str(app)})["prepared"]
     assert (app / "prepared.marker").read_text() == "prepared\nprepared\n"
     launcher.request({"cmd": "stop"})
+
+
+VENV_MAIN = """
+import os, signal, sys
+print("prefix", sys.prefix, "venv", os.environ.get("VIRTUAL_ENV"), flush=True)
+signal.pause()
+"""
+
+
+def test_an_app_with_a_venv_of_its_own_is_forked_warm_from_it():
+    launcher = Launcher().wait_ready()
+    try:
+        app = launcher.app("venv-app", main=VENV_MAIN)
+        (app / "python" / "requirements.txt").write_text("requests\n")
+        # A venv as run.sh makes it, the fake prepare only touches its interpreter
+        venv.EnvBuilder(system_site_packages=True, symlinks=True).create(app / ".cache" / ".venv")
+        pid = launcher.launcher_pid()
+
+        first = launcher.request({"cmd": "start", "app": str(app)})
+        assert first["ok"] and first["prepared"] and first["warm"], first
+        status = launcher.request({"cmd": "status"})
+        assert status["venv"] == str(app / ".cache" / ".venv")
+        assert launcher.launcher_pid() == pid, "the launcher became the venv interpreter in place"
+        assert f"prefix {app / '.cache' / '.venv'} venv {app / '.cache' / '.venv'}" in launcher.output(until="prefix")
+        wait_until(lambda: "json" in launcher.request({"cmd": "status"})["preload"]["loaded"])
+
+        second = launcher.request({"cmd": "start", "app": str(app)})
+        assert second["ok"] and second["warm"] and not second["prepared"]
+        assert launcher.request({"cmd": "stop"})["ok"]
+    finally:
+        launcher.remove()
+
+
+def test_a_streamlit_app_with_its_venv_is_served_warm_from_it():
+    launcher = Launcher().wait_ready()
+    try:
+        app = launcher.app("venv-dashboard", app_yaml="bricks:\n  - arduino:streamlit_ui: {}\n")
+        venv.EnvBuilder(system_site_packages=True, symlinks=True).create(app / ".cache" / ".venv")
+
+        started = launcher.request({"cmd": "start", "app": str(app)})
+        assert (started["warm"], started["runner"], started["prepared"]) == (True, "streamlit", True), started
+        main_py = app / "python" / "main.py"
+        assert f"streamlit serves {main_py} False [] {app} {app / '.cache' / '.venv'}" in launcher.output(until="streamlit serves")
+        assert "streamlit options [('server.port', 7000)]" in launcher.output()
+        wait_until(lambda: "streamlit.web.bootstrap" in launcher.request({"cmd": "status"})["preload"]["loaded"])
+        assert launcher.request({"cmd": "stop"})["ok"]
+    finally:
+        launcher.remove()
 
 
 def test_a_failing_preparation_starts_nothing(launcher):

@@ -70,8 +70,8 @@ Before any app code runs, the child:
 
 Two kinds of apps are not run warm: the child execs instead, with the same environment, cwd and process group, and `start` reports `"warm":false`.
 
-- An app with dependencies of its own, as the preparation defines them, or whose venv `<app>/.cache/.venv` holds a `*.dist-info` or a `*.pth` other than the `_virtualenv.pth` of an empty `uv venv`. The child execs the venv interpreter on `main.py`.
-- A Streamlit app, whose `app.yaml` mentions `arduino:streamlit_ui` as run.sh checks: the child execs `<venv python> -m streamlit run --server.port 7000 <app>/python/main.py`, the port run.sh always gave Streamlit, since the preparation installs Streamlit in the venv. `start` reports `"runner":"streamlit"`.
+- An app with dependencies of its own, as the preparation defines them, or whose venv `<app>/.cache/.venv` holds a `*.dist-info` or a `*.pth` other than the `_virtualenv.pth` of an empty `uv venv`. The launcher becomes the venv interpreter before the first fork: it execs `<venv python>` on itself, taking its control socket and the pending start along (`APP_LAUNCHER_LISTEN_FD`, `APP_LAUNCHER_PENDING_*`), so the pid stays, that start is answered by the new process and every fork from then on inherits the packages of the venv. A `run.sh serve` finds the venv of `APP_DIR` already there and starts in it. Only when the venv cannot be entered does the child exec the venv interpreter on `main.py`, cold.
+- A Streamlit app, whose `app.yaml` mentions `arduino:streamlit_ui` as run.sh checks: the preparation installs Streamlit in the venv, the launcher in that venv preloads `streamlit.web.bootstrap` and the child serves `main.py` through it on port 7000, the port run.sh always gave Streamlit, as `streamlit run` does. Outside the venv the child execs `<venv python> -m streamlit run --server.port 7000 <app>/python/main.py` instead. `start` reports `"runner":"streamlit"`.
 
 ## Preparation
 

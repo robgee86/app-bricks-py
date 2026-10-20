@@ -11,6 +11,7 @@ between two runs of the loop, never inside a callback, so the child never unwind
 import asyncio
 import gc
 import importlib
+import importlib.util
 import logging
 import os
 import signal
@@ -19,7 +20,7 @@ import stat
 import sys
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, MutableMapping
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -51,6 +52,10 @@ PRELOAD_GRACE_S = 0.5
 """How many times a sweep lists and kills what a stopped app left behind, for a leftover forking in between."""
 _HOST_PID_NAMESPACE = 0xEFFFFFFC
 """The inode the kernel always gives the initial pid namespace, the host one."""
+VENV_PRELOAD = ("streamlit.web.bootstrap",)
+"""What a launcher running in an app venv preloads on top, when the venv has it: the Streamlit of the app."""
+LISTEN_FD_VAR, PENDING_FD_VAR, PENDING_REQUEST_VAR = "APP_LAUNCHER_LISTEN_FD", "APP_LAUNCHER_PENDING_FD", "APP_LAUNCHER_PENDING_REQUEST"
+PENDING_PREPARED_VAR = "APP_LAUNCHER_PENDING_PREPARED"
 
 SignalHandler = Callable[[int, FrameType | None], Any] | int | signal.Handlers | None
 
@@ -79,6 +84,34 @@ class Config:
             run_sh=env.get("APP_LAUNCHER_RUN_SH", DEFAULT_RUN_SH),
             prepare_timeout_s=float(env.get("APP_LAUNCHER_PREPARE_TIMEOUT_S", "600")),
         )
+
+
+@dataclass(frozen=True)
+class Handover:
+    """What a launcher that became the venv interpreter of its app took along: its socket and the start it was serving."""
+
+    listen_fd: int | None = None
+    pending_fd: int | None = None
+    pending_request: bytes | None = None
+    pending_prepared: bool = False
+    """Whether the launcher prepared the app of the pending start before it became the venv interpreter."""
+
+    @classmethod
+    def take_from(cls, env: MutableMapping[str, str]) -> "Handover":
+        """Reads and removes the handover from the environment, so that no app inherits it."""
+        listen_fd, pending_fd, pending, prepared = (
+            env.pop(name, None) for name in (LISTEN_FD_VAR, PENDING_FD_VAR, PENDING_REQUEST_VAR, PENDING_PREPARED_VAR)
+        )
+        return cls(
+            listen_fd=None if listen_fd is None else int(listen_fd),
+            pending_fd=None if pending_fd is None else int(pending_fd),
+            pending_request=None if pending is None else pending.encode(),
+            pending_prepared=prepared == "1",
+        )
+
+    @property
+    def happened(self) -> bool:
+        return self.listen_fd is not None
 
 
 @dataclass(eq=False)
@@ -119,12 +152,23 @@ class _ForkRequest:
     done: asyncio.Future[Child] = field(repr=False)
 
 
+class _BecomeVenv(Exception):
+    """A start of an app with a venv of its own: the launcher has to become that interpreter before it forks."""
+
+    def __init__(self, interpreter: str, request: Start, prepared: bool) -> None:
+        super().__init__(interpreter)
+        self.interpreter = interpreter
+        self.request = request
+        self.prepared = prepared
+
+
 class Supervisor:
     """Owns the control socket and the app process of this container."""
 
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, handover: Handover | None = None) -> None:
         """Prepares the supervisor; the signal dispositions of this moment are the ones a fresh `python main.py` has."""
         self._config = config
+        self._handover = handover or Handover()
         self._dispositions: dict[int, SignalHandler] = {signum: signal.getsignal(signum) for signum in HANDLED_SIGNALS}
         self._pending_preload = list(config.preload)
         self._preloaded: list[str] = []
@@ -151,6 +195,8 @@ class Supervisor:
         self._loop.add_signal_handler(signal.SIGCHLD, self._reap)
         self._loop.run_until_complete(self._open())
         self._log_ready()
+        if self._handover.pending_fd is not None and self._handover.pending_request is not None:
+            self._loop.create_task(self._serve_pending(self._handover.pending_fd, self._handover.pending_request))
         # The socket is served first: a start arriving before the preload is done forks between two imports, the app
         # imports what it needs itself, and the remaining modules are imported afterwards, one between two turns of the loop
         self._loop.call_later(PRELOAD_GRACE_S, self._preload_step)
@@ -167,7 +213,11 @@ class Supervisor:
         return None
 
     async def _open(self) -> None:
-        self._control = await asyncio.start_unix_server(self._on_control, sock=self._bind_control_socket(), limit=protocol.MAX_LINE_BYTES)
+        if self._handover.listen_fd is not None:
+            sock = socket.socket(fileno=self._handover.listen_fd)
+        else:
+            sock = self._bind_control_socket()
+        self._control = await asyncio.start_unix_server(self._on_control, sock=sock, limit=protocol.MAX_LINE_BYTES)
 
     def _bind_control_socket(self) -> socket.socket:
         path = self._config.socket_path
@@ -198,7 +248,22 @@ class Supervisor:
         # Native threads are invisible to threading: only Linux lists them all
         native = f", {len(os.listdir('/proc/self/task'))} OS threads" if os.path.isdir("/proc/self/task") else ""
         sweep = "" if self._owns_container else ", not atop a container: a stop kills the app process group only"
-        logger.info(f"Ready on {self._config.socket_path}, {len(threads)} Python threads{native}{sweep}")
+        venv = f", in the venv {sys.prefix}" if _in_a_venv() else ""
+        logger.info(f"Ready on {self._config.socket_path}, {len(threads)} Python threads{native}{sweep}{venv}")
+        if self._in_app_venv():
+            # The fork inherits the app's own packages too: Streamlit, when the venv has it
+            self._pending_preload.extend(
+                name for name in VENV_PRELOAD if name not in self._pending_preload and importlib.util.find_spec(name.partition(".")[0])
+            )
+
+    def _in_app_venv(self) -> bool:
+        """Whether this interpreter is the venv of the app of this container: named by APP_DIR, or by the start taken along."""
+        apps = [os.environ.get("APP_DIR")]
+        if self._handover.pending_request is not None:
+            with suppress(LauncherError):
+                request = protocol.decode_request(self._handover.pending_request)
+                apps.append(request.app if isinstance(request, Start) else None)
+        return any(app and child.in_venv(prepare.venv_dir(app)) for app in apps)
 
     def _preload_step(self) -> None:
         """Imports the next module of the preload, keeping any signal handler it installs for the app, not for the loop."""
@@ -243,13 +308,34 @@ class Supervisor:
 
     async def _on_control(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
-            try:
-                response = await self._handle(await _read_request(reader))
-            except LauncherError as e:
-                response = protocol.error(e)
-            except Exception as e:
-                logger.exception("Request failed")
-                response = protocol.error(LauncherError(ErrorCode.INTERNAL, repr(e)))
+            request = await _read_request(reader)
+        except LauncherError as e:
+            await self._write(writer, protocol.error(e))
+            return
+        except (OSError, TimeoutError):
+            writer.close()
+            return
+        await self._respond(writer, request)
+
+    async def _serve_pending(self, fd: int, line: bytes) -> None:
+        """Answers the start the launcher was serving when it became the venv interpreter, on the connection it took along."""
+        _, writer = await asyncio.open_unix_connection(sock=socket.socket(fileno=fd))
+        await self._respond(writer, protocol.decode_request(line), prepared_before=self._handover.pending_prepared)
+
+    async def _respond(self, writer: asyncio.StreamWriter, request: Request, prepared_before: bool = False) -> None:
+        try:
+            response = await self._handle(request, prepared_before)
+        except _BecomeVenv as e:
+            self._become_venv(e, writer)
+        except LauncherError as e:
+            response = protocol.error(e)
+        except Exception as e:
+            logger.exception("Request failed")
+            response = protocol.error(LauncherError(ErrorCode.INTERNAL, repr(e)))
+        await self._write(writer, response)
+
+    async def _write(self, writer: asyncio.StreamWriter, response: dict[str, Any]) -> None:
+        try:
             writer.write(protocol.encode(response))
             await writer.drain()
         except (OSError, TimeoutError):
@@ -257,7 +343,28 @@ class Supervisor:
         finally:
             writer.close()
 
-    async def _handle(self, request: Request) -> dict[str, Any]:
+    def _become_venv(self, become: _BecomeVenv, writer: asyncio.StreamWriter) -> NoReturn:
+        """Replaces this process with the launcher under the venv interpreter of the app, the socket and the pending start
+        along: the apps forked from now on inherit the packages of the venv. The pid stays, nothing of the loop survives."""
+        assert self._control is not None
+        listen_fd = os.dup(self._control.sockets[0].fileno())
+        pending_fd = os.dup(writer.get_extra_info("socket").fileno())
+        for fd in (listen_fd, pending_fd):
+            os.set_inheritable(fd, True)
+        interpreter, request = become.interpreter, become.request
+        env = {
+            **os.environ,
+            LISTEN_FD_VAR: str(listen_fd),
+            PENDING_FD_VAR: str(pending_fd),
+            PENDING_REQUEST_VAR: protocol.encode({"cmd": "start", "app": request.app, "env": dict(request.env)}).decode(),
+            PENDING_PREPARED_VAR: "1" if become.prepared else "0",
+        }
+        logger.info(f"Becoming the venv interpreter {interpreter} of {request.app}")
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.execve(interpreter, [interpreter, "-c", _VENV_BOOTSTRAP % _package_root()], env)
+
+    async def _handle(self, request: Request, prepared_before: bool = False) -> dict[str, Any]:
         match request:
             case Ping():
                 return protocol.ok()
@@ -266,7 +373,7 @@ class Supervisor:
             case Start():
                 async with self._lifecycle:
                     self._refuse_while_exiting()
-                    return await self._start(request)
+                    return await self._start(request, prepared_before)
             case Stop():
                 # A preparation may hold the lifecycle for minutes
                 self._stop_preparation()
@@ -282,6 +389,7 @@ class Supervisor:
     def _status(self) -> dict[str, Any]:
         return {
             "child": None if self._child is None else self._child.describe(),
+            "venv": sys.prefix if _in_a_venv() else None,
             "preload": {"modules": list(self._config.preload), "loaded": list(self._preloaded), "failed": list(self._preload_failed)},
             "version": __version__,
             "uptime_s": round(time.monotonic() - self._started, 3),
@@ -289,7 +397,8 @@ class Supervisor:
 
     # Lifecycle
 
-    async def _start(self, request: Start) -> dict[str, Any]:
+    async def _start(self, request: Start, prepared_before: bool = False) -> dict[str, Any]:
+        """Starts the app; prepared_before tells that this very start prepared it already, in the process this one replaced."""
         app = request.app
         if not os.path.isdir(app):
             raise LauncherError(ErrorCode.NOT_FOUND, f"no app folder at {app}")
@@ -302,11 +411,17 @@ class Supervisor:
 
         env = {**os.environ, **request.env}
         started = time.monotonic()
-        prepared = await self._prepare(app, env)
+        prepared = await self._prepare(app, env) or prepared_before
         prepare_ms = _ms_since(started)
 
+        interpreter = child.venv_interpreter(app)
+        if interpreter is not None and not self._handover.happened:
+            raise _BecomeVenv(interpreter, request, prepared)
+        if interpreter is not None:
+            logger.warning(f"Not running in the venv {interpreter} after becoming it, {app} runs cold in it")
+
         started = time.monotonic()
-        launch = Launch(app=app, env=env, runner=child.runner(app), interpreter=child.venv_interpreter(app))
+        launch = Launch(app=app, env=env, runner=child.runner(app), interpreter=interpreter)
         fork = _ForkRequest(launch=launch, done=self._loop.create_future())
         self._fork_request = fork
         self._loop.stop()
@@ -457,6 +572,27 @@ class Supervisor:
             logger.info(f"Killed what was left behind: pids {sorted(killed)}")
 
 
+_VENV_BOOTSTRAP = """\
+import sys
+try:
+    import arduino.app_tools.app_launcher
+except ImportError:
+    sys.path.append(%r)
+from arduino.app_tools.app_launcher.__main__ import main
+raise SystemExit(main())
+"""
+"""Runs the launcher in a venv that sees the image packages; a venv that does not, as in a test, gets this installation last."""
+
+
+def _package_root() -> str:
+    """The folder the `arduino` package is installed in."""
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+
+def _in_a_venv() -> bool:
+    return sys.prefix != sys.base_prefix
+
+
 def _owns_container() -> bool:
     """Whether the supervisor tops a pid namespace of its own, as PID 1 or the child of the init docker runs as PID 1."""
     try:
@@ -538,10 +674,11 @@ def _exit_now(signum: int, frame: FrameType | None) -> NoReturn:
 def main() -> int:
     """Runs the supervisor; in a forked child it returns the app's exit code."""
     _setup_logging()
+    handover = Handover.take_from(os.environ)
     try:
         config = Config.from_env(os.environ)
     except ValueError as e:
         logger.error(f"Invalid configuration: {e}")
         return 2
-    launch = Supervisor(config).serve()
+    launch = Supervisor(config, handover).serve()
     return 0 if launch is None else child.run(launch)

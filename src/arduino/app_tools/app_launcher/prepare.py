@@ -69,9 +69,14 @@ def fingerprint(app: str) -> str | None:
     return digest.hexdigest()
 
 
+def venv_dir(app: str) -> str:
+    """Returns the app venv folder, which run.sh creates."""
+    return os.path.join(app, ".cache", ".venv")
+
+
 def venv_python(app: str) -> str:
-    """Returns the interpreter path of the app venv, which run.sh creates."""
-    return os.path.join(app, ".cache", ".venv", "bin", "python")
+    """Returns the interpreter path of the app venv."""
+    return os.path.join(venv_dir(app), "bin", "python")
 
 
 def needs_preparation(app: str, current: str) -> bool:
