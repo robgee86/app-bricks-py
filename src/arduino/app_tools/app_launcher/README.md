@@ -56,7 +56,7 @@ The child runs with the container environment updated by the `env` of the start 
 
 ## Logs
 
-The app inherits the container stdout and stderr: what it prints is read with `docker logs`, as in the classic stack. The supervisor writes its own lines to stderr, prefixed with `app-launcher:`, and relays the preparation output to stdout.
+The app inherits the container stdout and stderr: what it prints is read with `docker logs`, as in the classic stack. The supervisor writes its own lines to stderr, prefixed with `app-launcher:`, warnings only unless `APP_LAUNCHER_LOG_LEVEL` asks for `info` or `debug`, and relays the preparation output to stdout.
 
 ## The app child
 

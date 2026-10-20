@@ -120,6 +120,7 @@ class Launcher:
             "APP_LAUNCHER_PRELOAD": preload,
             "APP_LAUNCHER_SOCKET": self.socket,
             "APP_LAUNCHER_STOP_TIMEOUT_S": "1",
+            "APP_LAUNCHER_LOG_LEVEL": "info",
             "APP_LAUNCHER_RUN_SH": str(run_sh),
             "GREETING": "from the container",
             "INHERITED": "yes",

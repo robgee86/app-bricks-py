@@ -523,10 +523,11 @@ def _ms_since(started: float) -> float:
 
 
 def _setup_logging() -> None:
+    """Logs to stderr, which the container log shows next to the app output: warnings only unless APP_LAUNCHER_LOG_LEVEL says more."""
     handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s app-launcher: %(message)s"))
     logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
+    logger.setLevel(os.environ.get("APP_LAUNCHER_LOG_LEVEL", "WARNING").upper())
     logger.propagate = False
 
 
