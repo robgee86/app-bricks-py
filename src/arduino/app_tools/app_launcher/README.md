@@ -46,7 +46,7 @@ Errors are `{"ok":false,"error":{"code":..,"message":..}}` with `code` one of `b
 
 ## Ports
 
-The launcher publishes no port: the CLI's ingress does, forwarding each public port of the app to the same port in the launcher's container, where the app binds it. The `ports` of the `start` request are those ports, the ones the app's bricks declare, and the only TCP ports the confined app may bind.
+The launcher container publishes the union of the public ports of every app on the board, and the CLI recreates it when a new port appears; the app binds its own ports inside it. The `ports` of the `start` request are those ports, the ones the app's bricks declare, and the only TCP ports the confined app may bind.
 
 ## The app child
 
