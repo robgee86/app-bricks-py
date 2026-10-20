@@ -9,7 +9,6 @@ import sys
 import pytest
 
 from arduino.app_tools.app_launcher import prepare
-from arduino.app_tools.app_launcher.applog import AppLog
 from arduino.app_tools.app_launcher.protocol import ErrorCode, LauncherError
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="the launcher spawns run.sh, POSIX only")
@@ -104,18 +103,16 @@ async def run(app, script, timeout_s=5.0):
         reapers.append(loop.create_task(reap()))
         return exited
 
-    log = AppLog(str(app))
     try:
-        await prepare.run(str(app), {"PATH": os.environ["PATH"]}, script, timeout_s, log, watch, confine=False)
+        await prepare.run(str(app), {"PATH": os.environ["PATH"], "GREETING": "hi"}, script, timeout_s, watch)
     finally:
-        log.close()
         await asyncio.gather(*reapers)
 
 
-def test_run_appends_the_output_to_the_app_log(tmp_path):
-    script = run_sh(tmp_path, 'echo "preparing $APP_DIR $1"\necho oops >&2')
+def test_run_relays_the_output_to_stdout(tmp_path, capfd):
+    script = run_sh(tmp_path, 'echo "preparing $APP_DIR $1 $GREETING"\necho oops >&2')
     asyncio.run(run(tmp_path, script))
-    assert (tmp_path / ".cache" / "logs" / "app.log").read_text() == f"preparing {tmp_path} prepare\noops\n"
+    assert capfd.readouterr().out == f"preparing {tmp_path} prepare hi\noops\n"
 
 
 def test_a_failure_reports_the_last_lines(tmp_path):

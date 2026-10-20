@@ -41,7 +41,8 @@ def test_asoundrc_does_not_depend_on_the_runtime_environment(tmp_path: Path):
     assert "pcm.plug_card_9_dev_4_spk" in baked
 
 
-def test_image_bakes_asoundrc_into_the_home_skeleton_and_run_sh_never_generates_it():
+def test_image_bakes_asoundrc_into_the_home_and_run_sh_never_generates_it():
     dockerfile = (IMAGE_DIR / "Dockerfile").read_text()
-    assert "HOME=/etc/skel bash /provision-alsa-devices.sh" in dockerfile
+    assert "HOME=/home/app bash /provision-alsa-devices.sh" in dockerfile
+    assert dockerfile.index("provision-alsa-devices.sh") < dockerfile.index("chown arduino:arduino -R /home/app")
     assert "provision-alsa-devices.sh" not in RUN_SH.read_text()

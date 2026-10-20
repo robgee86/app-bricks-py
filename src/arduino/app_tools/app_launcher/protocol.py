@@ -6,7 +6,8 @@
 
 import json
 import os
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
@@ -17,8 +18,6 @@ MAX_LINE_BYTES = 1024 * 1024
 class ErrorCode(StrEnum):
     BAD_REQUEST = "bad_request"
     NOT_FOUND = "not_found"
-    UNSUPPORTED = "unsupported"
-    FORBIDDEN = "forbidden"
     BUSY = "busy"
     PREPARE_FAILED = "prepare_failed"
     INTERNAL = "internal"
@@ -33,22 +32,16 @@ class LauncherError(Exception):
         self.message = message
 
 
-class Mode(StrEnum):
-    REPLACE = "replace"
-    ADD = "add"
-
-
 @dataclass(frozen=True)
 class Start:
     app: str
-    mode: Mode = Mode.REPLACE
-    ports: tuple[int, ...] = ()
-    """The TCP ports the app may bind, the ones it declares."""
+    env: Mapping[str, str] = field(default_factory=dict[str, str])
+    """The app environment, laid over the container one."""
 
 
 @dataclass(frozen=True)
 class Stop:
-    app: str | None = None
+    pass
 
 
 @dataclass(frozen=True)
@@ -90,18 +83,11 @@ def decode_request(line: bytes) -> Request:
     except (UnicodeDecodeError, json.JSONDecodeError) as e:
         raise LauncherError(ErrorCode.BAD_REQUEST, f"invalid JSON: {e}") from None
     match message:
-        case {"cmd": "start", "env": _}:
-            # Never through the launcher process: what it read of one app would linger in the memory the next is forked from
-            raise LauncherError(ErrorCode.BAD_REQUEST, "env is not taken, the app environment is read from <app>/.cache/environment.json")
         case {"cmd": "start"}:
-            return Start(
-                app=_app(message.get("app")),
-                mode=_mode(message.get("mode", Mode.REPLACE)),
-                ports=_ports(message.get("ports", [])),
-            )
+            return Start(app=_app(message.get("app")), env=_env(message.get("env", {})))
         case {"cmd": "stop"}:
-            app = message.get("app")
-            return Stop(app=None if app is None else _app(app))
+            # One app per container: an app named in the request is ignored
+            return Stop()
         case {"cmd": "status"}:
             return Status()
         case {"cmd": "ping"}:
@@ -112,12 +98,6 @@ def decode_request(line: bytes) -> Request:
             raise LauncherError(ErrorCode.BAD_REQUEST, "a request must be a JSON object with a cmd")
 
 
-def _ports(value: object) -> tuple[int, ...]:
-    if not isinstance(value, list) or not all(isinstance(p, int) and not isinstance(p, bool) and 1 <= p <= 65535 for p in value):
-        raise LauncherError(ErrorCode.BAD_REQUEST, "ports must be a list of port numbers")
-    return tuple(sorted(set(value)))
-
-
 def _app(value: object) -> str:
     match value:
         case str() if os.path.isabs(value):
@@ -126,8 +106,16 @@ def _app(value: object) -> str:
             raise LauncherError(ErrorCode.BAD_REQUEST, "app must be the absolute path of the app folder")
 
 
-def _mode(value: object) -> Mode:
-    try:
-        return Mode(value)
-    except ValueError:
-        raise LauncherError(ErrorCode.BAD_REQUEST, f"mode must be one of {[str(m) for m in Mode]}") from None
+def _env(value: object) -> dict[str, str]:
+    match value:
+        case dict():
+            env: dict[str, str] = {}
+            for item in value.items():
+                match item:
+                    case (str() as key, str() as text) if key and "=" not in key and "\0" not in key + text:
+                        env[key] = text
+                    case _:
+                        raise LauncherError(ErrorCode.BAD_REQUEST, "env must map variable names, without = or NUL, to strings")
+            return env
+        case _:
+            raise LauncherError(ErrorCode.BAD_REQUEST, "env must be an object of strings")

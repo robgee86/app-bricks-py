@@ -6,18 +6,14 @@ import json
 
 import pytest
 
-from arduino.app_tools.app_launcher.protocol import ErrorCode, LauncherError, Mode, Ping, Start, Status, Stop, decode_request, encode, error, ok
+from arduino.app_tools.app_launcher.protocol import ErrorCode, LauncherError, Ping, Start, Status, Stop, decode_request, encode, error, ok
 
 
 def test_decodes_every_request():
-    assert decode_request(b'{"cmd":"start","app":"/apps/a/","mode":"replace"}\n') == Start(app="/apps/a")
-    assert decode_request(b'{"cmd":"start","app":"/apps/a","mode":"add"}') == Start(app="/apps/a", mode=Mode.ADD)
-    assert decode_request(b'{"cmd":"start","app":"/apps/a","ports":[8080,7000,7000]}') == Start(app="/apps/a", ports=(7000, 8080))
-    for ports in (b"7000", b"[0]", b"[70000]", b'["7000"]', b"[true]"):
-        with pytest.raises(LauncherError, match="ports"):
-            decode_request(b'{"cmd":"start","app":"/apps/a","ports":' + ports + b"}")
+    assert decode_request(b'{"cmd":"start","app":"/app/"}\n') == Start(app="/app")
+    assert decode_request(b'{"cmd":"start","app":"/app","env":{"K":"V","EMPTY":""}}') == Start(app="/app", env={"K": "V", "EMPTY": ""})
     assert decode_request(b'{"cmd":"stop"}') == Stop()
-    assert decode_request(b'{"cmd":"stop","app":"/apps/a"}') == Stop(app="/apps/a")
+    assert decode_request(b'{"cmd":"stop","app":"/app"}') == Stop(), "one app per container, the name is ignored"
     assert decode_request(b'{"cmd":"status"}') == Status()
     assert decode_request(b'{"cmd":"ping"}') == Ping()
 
@@ -32,9 +28,11 @@ def test_decodes_every_request():
         b'{"cmd":"reboot"}',
         b'{"cmd":"start"}',
         b'{"cmd":"start","app":"apps/a"}',
-        b'{"cmd":"start","app":"/apps/a","env":{"K":"V"}}',
-        b'{"cmd":"start","app":"/apps/a","mode":"sideways"}',
-        b'{"cmd":"stop","app":42}',
+        b'{"cmd":"start","app":"/apps/a","env":["K=V"]}',
+        b'{"cmd":"start","app":"/apps/a","env":{"K":1}}',
+        b'{"cmd":"start","app":"/apps/a","env":{"K=X":"V"}}',
+        b'{"cmd":"start","app":"/apps/a","env":{"":"V"}}',
+        b'{"cmd":"start","app":"/apps/a","env":{"K":"V\\u0000"}}',
     ],
 )
 def test_rejects_malformed_requests(line):
@@ -47,7 +45,7 @@ def test_responses_are_single_json_lines():
     line = encode(ok(pid=12, timings={"stop_ms": 1.5}))
     assert line.endswith(b"\n") and line.count(b"\n") == 1
     assert json.loads(line) == {"ok": True, "pid": 12, "timings": {"stop_ms": 1.5}}
-    assert json.loads(encode(error(LauncherError(ErrorCode.UNSUPPORTED, "one app at a time")))) == {
+    assert json.loads(encode(error(LauncherError(ErrorCode.BUSY, "shutting down")))) == {
         "ok": False,
-        "error": {"code": "unsupported", "message": "one app at a time"},
+        "error": {"code": "busy", "message": "shutting down"},
     }

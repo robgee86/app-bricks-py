@@ -12,8 +12,7 @@ import sys
 from collections.abc import Sequence
 from typing import Any
 
-from . import appenv
-from .protocol import DEFAULT_SOCKET, Mode
+from .protocol import DEFAULT_SOCKET
 
 
 def request(message: dict[str, Any], socket_path: str = DEFAULT_SOCKET, timeout_s: float = 60.0) -> dict[str, Any]:
@@ -35,27 +34,19 @@ def main(argv: Sequence[str]) -> int:
     parser.add_argument("--socket", default=os.environ.get("APP_LAUNCHER_SOCKET", DEFAULT_SOCKET), help="control socket path")
     commands = parser.add_subparsers(dest="cmd", required=True)
     commands.add_parser("ping", help="check that the launcher answers")
-    commands.add_parser("status", help="show the running apps and the preload")
-    start = commands.add_parser("start", help="start an app")
+    commands.add_parser("status", help="show the running app and the preload")
+    start = commands.add_parser("start", help="start an app, stopping the running one first")
     start.add_argument("app", help="app folder")
-    start.add_argument("--env", action="append", default=[], metavar="K=V", help="app environment variable, written to the app folder, repeatable")
-    start.add_argument("--mode", default=str(Mode.REPLACE), choices=[str(mode) for mode in Mode])
-    start.add_argument("--port", action="append", type=int, default=[], metavar="P", help="a TCP port the app may bind, repeatable")
-    stop = commands.add_parser("stop", help="stop one app, or every app")
-    stop.add_argument("app", nargs="?", help="app folder")
+    start.add_argument("--env", action="append", default=[], metavar="K=V", help="app environment variable, repeatable")
+    commands.add_parser("stop", help="stop the running app")
     args = parser.parse_args(argv)
 
     message: dict[str, Any] = {"cmd": args.cmd}
     if args.cmd == "start":
         if not all("=" in item for item in args.env):
             parser.error("--env takes K=V")
-        app = os.path.abspath(args.app)
-        if args.env:
-            # As the daemon does: the launcher takes no environment, the app reads its own from its folder
-            appenv.write(app, {key: value for key, _, value in (item.partition("=") for item in args.env)})
-        message |= {"app": app, "mode": args.mode, "ports": args.port}
-    elif args.cmd == "stop" and args.app:
-        message["app"] = os.path.abspath(args.app)
+        env = {key: value for key, _, value in (item.partition("=") for item in args.env)}
+        message |= {"app": os.path.abspath(args.app), "env": env}
     # A start may install the app dependencies first
     timeout_s = 60.0 + (float(os.environ.get("APP_LAUNCHER_PREPARE_TIMEOUT_S", "600")) if args.cmd == "start" else 0.0)
     try:

@@ -11,7 +11,7 @@ from arduino.app_tools.app_launcher.child import Launch, Runner, environment, re
 
 
 def launch(app, env, **fields):
-    return Launch(app=str(app), env=env, output_fd=-1, **fields)
+    return Launch(app=str(app), env=env, **fields)
 
 
 @pytest.fixture
@@ -70,13 +70,8 @@ def test_streamlit_apps_are_exec_d_through_streamlit(tmp_path):
 
 
 def test_environment_is_the_launch_one_unbuffered(tmp_path):
-    env = environment(Launch(app=str(tmp_path), env={"HOME": "/home/app"}, output_fd=-1))
+    env = environment(launch(tmp_path, {"HOME": "/home/app", "PYTHONUNBUFFERED": "0"}))
     assert env == {"HOME": "/home/app", "PYTHONUNBUFFERED": "1"}
-
-
-def test_environment_layers_the_app_own_variables_but_for_home(tmp_path):
-    env = environment(launch(tmp_path, {"HOME": "/apps/a/.cache/home", "PATH": "/usr/bin"}), {"HOME": "/elsewhere", "TOKEN": "t", "PATH": "/evil"})
-    assert env == {"HOME": "/apps/a/.cache/home", "PATH": "/evil", "TOKEN": "t", "PYTHONUNBUFFERED": "1"}
 
 
 def test_environment_adds_the_app_bricks_to_pythonpath(tmp_path):

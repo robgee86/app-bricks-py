@@ -2,14 +2,13 @@
 #
 # SPDX-License-Identifier: MPL-2.0
 
-"""The launcher process: imports the heavy libraries once, then forks a child per app on request.
+"""The launcher process: imports the heavy libraries once, then forks the app of its container on request.
 
 The parent stays single-threaded: one asyncio loop, no executors, numeric addresses only. Forks happen
 between two runs of the loop, never inside a callback, so the child never unwinds through asyncio.
 """
 
 import asyncio
-import ctypes
 import gc
 import importlib
 import logging
@@ -17,7 +16,6 @@ import os
 import signal
 import socket
 import stat
-import struct
 import sys
 import threading
 import time
@@ -30,10 +28,9 @@ from typing import Any, NoReturn
 
 from arduino.version import __version__
 
-from . import child, confinement, home, prepare, protocol
-from .applog import CHUNK_BYTES, AppLog
+from . import child, prepare, protocol
 from .child import Launch, Runner
-from .protocol import ErrorCode, LauncherError, Mode, Ping, Request, Start, Status, Stop
+from .protocol import ErrorCode, LauncherError, Ping, Request, Start, Status, Stop
 
 logger = logging.getLogger("arduino.app_tools.app_launcher")
 
@@ -46,13 +43,12 @@ DEFAULT_PRELOAD = ",".join((
     "arduino.app_bricks.web_ui",
 ))
 DEFAULT_RUN_SH = "/run.sh"
-DEFAULT_APP_ALIAS = "/app"
-"""The path that names the running app for compatibility: in the image, a link to the link the launcher points at the app."""
 REQUEST_TIMEOUT_S = 5.0
 HANDLED_SIGNALS = (signal.SIGTERM, signal.SIGINT, signal.SIGCHLD)
 STRAY_SWEEPS = 5
 """How many times a sweep lists and kills what a stopped app left behind, for a leftover forking in between."""
-_PR_SET_CHILD_SUBREAPER = 36
+_HOST_PID_NAMESPACE = 0xEFFFFFFC
+"""The inode the kernel always gives the initial pid namespace, the host one."""
 
 SignalHandler = Callable[[int, FrameType | None], Any] | int | signal.Handlers | None
 
@@ -66,10 +62,6 @@ class Config:
     stop_timeout_s: float
     run_sh: str
     prepare_timeout_s: float
-    confine: bool
-    """Whether apps and their preparations run confined to their folder with Landlock; off is for development only."""
-    app_link: str | None
-    """The link behind the alias, pointed at the running app; None when the alias is not a link, as outside the image."""
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> "Config":
@@ -84,31 +76,12 @@ class Config:
             stop_timeout_s=float(env.get("APP_LAUNCHER_STOP_TIMEOUT_S", "5")),
             run_sh=env.get("APP_LAUNCHER_RUN_SH", DEFAULT_RUN_SH),
             prepare_timeout_s=float(env.get("APP_LAUNCHER_PREPARE_TIMEOUT_S", "600")),
-            confine=_confinement_mode(env.get("APP_LAUNCHER_CONFINEMENT", "required")),
-            app_link=_link_behind(env.get("APP_LAUNCHER_APP_ALIAS", DEFAULT_APP_ALIAS)),
         )
-
-
-def _confinement_mode(value: str) -> bool:
-    match value:
-        case "required":
-            return True
-        case "off":
-            return False
-        case other:
-            raise ValueError(f"APP_LAUNCHER_CONFINEMENT must be required or off, not {other!r}")
-
-
-def _link_behind(alias: str) -> str | None:
-    try:
-        return os.readlink(alias)
-    except OSError:
-        return None
 
 
 @dataclass(eq=False)
 class Child:
-    """A running app process."""
+    """The running app process."""
 
     app: str
     pid: int
@@ -123,10 +96,10 @@ class Child:
         return {
             "app": self.app,
             "pid": self.pid,
-            "state": "stopping" if self.stopping else "running",
-            "started_at": self.started_at.isoformat(),
             "runner": str(self.runner),
             "warm": self.warm,
+            "started_at": self.started_at.isoformat(),
+            "stopping": self.stopping,
         }
 
 
@@ -134,15 +107,13 @@ class Child:
 class _Preparation:
     """A running `run.sh prepare`."""
 
-    app: str
+    pid: int
     exited: asyncio.Future[int]
 
 
 @dataclass(frozen=True)
 class _ForkRequest:
     launch: Launch
-    output_fd: int
-    log: AppLog | None
     done: asyncio.Future[Child] = field(repr=False)
 
 
@@ -162,7 +133,7 @@ def preload(modules: Sequence[str]) -> list[str]:
 
 
 class Supervisor:
-    """Owns the control socket and the table of running apps."""
+    """Owns the control socket and the app process of this container."""
 
     def __init__(self, config: Config, preload_failed: Sequence[str], dispositions: Mapping[int, SignalHandler]) -> None:
         """Prepares the supervisor.
@@ -177,12 +148,11 @@ class Supervisor:
         self._preload_failed = tuple(preload_failed)
         self._loop = asyncio.new_event_loop()
         self._lifecycle = asyncio.Lock()
-        self._children: dict[str, Child] = {}
-        self._landlock_abi = self._probe_confinement()
-        self._preparations: dict[int, _Preparation] = {}
+        self._child: Child | None = None
+        self._preparation: _Preparation | None = None
         self._control: asyncio.Server | None = None
         self._fork_request: _ForkRequest | None = None
-        self._chunk = bytearray(CHUNK_BYTES)
+        self._owns_container = _owns_container()
         self._exiting = False
         self._exit_task: asyncio.Task[None] | None = None
         self._started = time.monotonic()
@@ -196,7 +166,6 @@ class Supervisor:
         self._loop.add_signal_handler(signal.SIGTERM, self._request_exit, "SIGTERM")
         self._loop.add_signal_handler(signal.SIGINT, self._request_exit, "SIGINT")
         self._loop.add_signal_handler(signal.SIGCHLD, self._reap)
-        _adopt_orphans()
         self._loop.run_until_complete(self._open())
         self._log_ready()
         while True:
@@ -212,7 +181,6 @@ class Supervisor:
         return None
 
     async def _open(self) -> None:
-        self._unlink_app()
         self._control = await asyncio.start_unix_server(self._on_control, sock=self._bind_control_socket(), limit=protocol.MAX_LINE_BYTES)
 
     def _bind_control_socket(self) -> socket.socket:
@@ -237,41 +205,26 @@ class Supervisor:
         with suppress(FileNotFoundError):
             os.unlink(self._config.socket_path)
 
-    def _probe_confinement(self) -> int | None:
-        """The Landlock ABI apps are confined with; None when confinement is off, or required and unavailable: no app starts then."""
-        if not self._config.confine:
-            logger.warning("Confinement is off: apps are not confined to their folder, development only")
-            return None
-        try:
-            return confinement.abi()
-        except confinement.Unavailable:
-            logger.error("Confinement is required but the kernel has no Landlock: no app will be started")
-            return None
-
-    def _refuse_unconfined(self) -> None:
-        if self._config.confine and self._landlock_abi is None:
-            raise LauncherError(ErrorCode.UNSUPPORTED, "the kernel has no Landlock to confine apps with, and confinement is required")
-
     def _log_ready(self) -> None:
         threads = [thread.name for thread in threading.enumerate()]
         if len(threads) > 1:
             logger.warning(f"Threads alive after the preload, starting apps will be refused: {threads}")
         # Native threads are invisible to threading: only Linux lists them all
         native = f", {len(os.listdir('/proc/self/task'))} OS threads" if os.path.isdir("/proc/self/task") else ""
-        logger.info(f"Ready on {self._config.socket_path}, {len(threads)} Python threads{native}")
+        sweep = "" if self._owns_container else ", not atop a container: a stop kills the app process group only"
+        logger.info(f"Ready on {self._config.socket_path}, {len(threads)} Python threads{native}{sweep}")
 
     def _request_exit(self, signame: str) -> None:
         if self._exiting:
             return
         logger.info(f"{signame} received, stopping")
         self._exiting = True
-        self._stop_preparations(None)
+        self._stop_preparation()
         self._exit_task = self._loop.create_task(self._exit())
 
     async def _exit(self) -> None:
         async with self._lifecycle:
-            await self._stop_children(list(self._children.values()))
-            self._unlink_app()
+            await self._stop_child()
         self._loop.stop()
 
     # Control socket
@@ -279,7 +232,6 @@ class Supervisor:
     async def _on_control(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
             try:
-                _refuse_launched_peer(writer)
                 response = await self._handle(await _read_request(reader))
             except LauncherError as e:
                 response = protocol.error(e)
@@ -305,14 +257,11 @@ class Supervisor:
                     return await self._start(request)
             case Stop():
                 # A preparation may hold the lifecycle for minutes
-                self._stop_preparations(request.app)
+                self._stop_preparation()
                 async with self._lifecycle:
                     self._refuse_while_exiting()
-                    targets = [c for c in self._children.values() if request.app in (None, c.app)]
-                    stopped = await self._stop_children(targets)
-                    if not self._children:
-                        self._unlink_app()
-                    return protocol.ok(stopped=stopped)
+                    stopped = await self._stop_child()
+                    return protocol.ok(stopped=[] if stopped is None else [stopped])
 
     def _refuse_while_exiting(self) -> None:
         if self._exiting:
@@ -320,8 +269,7 @@ class Supervisor:
 
     def _status(self) -> dict[str, Any]:
         return {
-            "confinement": {"required": self._config.confine, "landlock_abi": self._landlock_abi},
-            "children": [c.describe() for c in self._children.values()],
+            "child": None if self._child is None else self._child.describe(),
             "preload": {"modules": list(self._config.preload), "failed": list(self._preload_failed)},
             "version": __version__,
             "uptime_s": round(time.monotonic() - self._started, 3),
@@ -330,41 +278,24 @@ class Supervisor:
     # Lifecycle
 
     async def _start(self, request: Start) -> dict[str, Any]:
-        if request.mode is Mode.ADD:
-            raise LauncherError(ErrorCode.UNSUPPORTED, "only one app at a time is supported for now, use mode replace")
         app = request.app
-        self._refuse_unconfined()
         if not os.path.isdir(app):
             raise LauncherError(ErrorCode.NOT_FOUND, f"no app folder at {app}")
         if not os.path.isfile(os.path.join(app, "python", "main.py")):
             raise LauncherError(ErrorCode.NOT_FOUND, f"no python/main.py in {app}")
 
         started = time.monotonic()
-        await self._stop_children(list(self._children.values()))
+        await self._stop_child()
         stop_ms = _ms_since(started)
-        self._link_app(app)
 
-        # The launcher's own environment and the home it decides: the app's own is read by the child once confined, never here
-        home = self._provision_home(app)
-        env = {**os.environ, "HOME": home}
-        log = self._open_log(app)
+        env = {**os.environ, **request.env}
         started = time.monotonic()
-        prepared = await self._prepare(app, env, log)
+        prepared = await self._prepare(app, env)
         prepare_ms = _ms_since(started)
 
         started = time.monotonic()
-        output_fd, input_fd = os.pipe()
-        os.set_blocking(output_fd, False)
-        launch = Launch(
-            app=app,
-            env=env,
-            output_fd=input_fd,
-            runner=child.runner(app),
-            interpreter=child.venv_interpreter(app),
-            ports=request.ports,
-            confine=self._config.confine,
-        )
-        fork = _ForkRequest(launch=launch, output_fd=output_fd, log=log, done=self._loop.create_future())
+        launch = Launch(app=app, env=env, runner=child.runner(app), interpreter=child.venv_interpreter(app))
+        fork = _ForkRequest(launch=launch, done=self._loop.create_future())
         self._fork_request = fork
         self._loop.stop()
         started_child = await fork.done
@@ -373,18 +304,11 @@ class Supervisor:
             started_at=started_child.started_at.isoformat(),
             warm=started_child.warm,
             runner=str(started_child.runner),
-            confined=self._config.confine,
             prepared=prepared,
             timings={"stop_ms": stop_ms, "prepare_ms": prepare_ms, "fork_ms": _ms_since(started)},
         )
 
-    def _provision_home(self, app: str) -> str:
-        try:
-            return home.provision(app)
-        except OSError as e:
-            raise LauncherError(ErrorCode.INTERNAL, f"cannot create the home of {app}: {e}") from None
-
-    async def _prepare(self, app: str, env: Mapping[str, str], log: AppLog | None) -> bool:
+    async def _prepare(self, app: str, env: Mapping[str, str]) -> bool:
         """Runs `run.sh prepare` when the app dependencies changed since the last success; returns whether it ran."""
         current = prepare.fingerprint(app)
         if current is None or not prepare.needs_preparation(app, current):
@@ -393,20 +317,10 @@ class Supervisor:
             # Checked in the loop step that spawns run.sh, so a shutdown never misses a preparation
             self._refuse_while_exiting()
             logger.info(f"Preparing {app}")
-            await prepare.run(
-                app,
-                env,
-                self._config.run_sh,
-                self._config.prepare_timeout_s,
-                log,
-                lambda pid: self._watch_preparation(app, pid),
-                confine=self._config.confine,
-            )
-        except BaseException as e:
-            if isinstance(e, LauncherError) and e.code is ErrorCode.PREPARE_FAILED:
+            await prepare.run(app, env, self._config.run_sh, self._config.prepare_timeout_s, self._watch_preparation)
+        except LauncherError as e:
+            if e.code is ErrorCode.PREPARE_FAILED:
                 logger.warning(f"Preparation of {app} failed: {e.message.splitlines()[0]}")
-            if log is not None:
-                log.close()
             raise
         try:
             prepare.record(app, current)
@@ -415,24 +329,22 @@ class Supervisor:
         logger.info(f"Prepared {app}")
         return True
 
-    def _watch_preparation(self, app: str, pid: int) -> asyncio.Future[int]:
+    def _watch_preparation(self, pid: int) -> asyncio.Future[int]:
         # Registered before the loop runs again, so the reaper always finds it
-        preparation = _Preparation(app=app, exited=self._loop.create_future())
-        self._preparations[pid] = preparation
-        return preparation.exited
+        self._preparation = _Preparation(pid=pid, exited=self._loop.create_future())
+        return self._preparation.exited
 
-    def _stop_preparations(self, app: str | None) -> None:
-        for pid, preparation in self._preparations.items():
-            if app in (None, preparation.app):
-                logger.info(f"Stopping the preparation of {preparation.app}")
-                with suppress(ProcessLookupError, PermissionError):
-                    os.killpg(pid, signal.SIGTERM)
+    def _stop_preparation(self) -> None:
+        if self._preparation is not None:
+            logger.info("Stopping the preparation")
+            with suppress(ProcessLookupError, PermissionError):
+                os.killpg(self._preparation.pid, signal.SIGTERM)
 
     def _fork(self, request: _ForkRequest) -> int:
         """Forks the app process; returns 0 in the child and the pid in the parent, or -1 when the fork failed."""
         if threading.active_count() > 1:
             threads = [thread.name for thread in threading.enumerate()]
-            self._abandon(request, LauncherError(ErrorCode.INTERNAL, f"refusing to fork with threads alive: {threads}"))
+            request.done.set_exception(LauncherError(ErrorCode.INTERNAL, f"refusing to fork with threads alive: {threads}"))
             return -1
         sys.stdout.flush()
         sys.stderr.flush()
@@ -444,87 +356,51 @@ class Supervisor:
             pid = os.fork()
         except OSError as e:
             pid = -1
-            self._abandon(request, LauncherError(ErrorCode.INTERNAL, f"fork failed: {e}"))
+            request.done.set_exception(LauncherError(ErrorCode.INTERNAL, f"fork failed: {e}"))
         if pid == 0:
-            self._become_child(request.launch.output_fd)
+            self._become_child()
         else:
             gc.unfreeze()
             if pid > 0:
-                request.done.set_result(self._adopt(request, pid))
+                request.done.set_result(self._adopt(request.launch, pid))
         signal.pthread_sigmask(signal.SIG_UNBLOCK, HANDLED_SIGNALS)
         return pid
 
-    def _adopt(self, request: _ForkRequest, pid: int) -> Child:
+    def _adopt(self, launch: Launch, pid: int) -> Child:
         # Registered before the loop runs again, so the reaper always finds it
-        os.close(request.launch.output_fd)
-        self._loop.add_reader(request.output_fd, self._relay_output, request.output_fd, request.log)
-        launched = Child(
-            app=request.launch.app,
+        self._child = Child(
+            app=launch.app,
             pid=pid,
-            runner=request.launch.runner,
-            warm=request.launch.exec_argv is None,
+            runner=launch.runner,
+            warm=launch.exec_argv is None,
             started_at=datetime.now(UTC),
             exited=self._loop.create_future(),
         )
-        self._children[launched.app] = launched
-        how = "warm" if launched.warm else f"as {' '.join(request.launch.exec_argv or [])}"
-        logger.info(f"Started {launched.app} as pid {pid}, {how}")
-        return launched
+        how = "warm" if self._child.warm else f"as {' '.join(launch.exec_argv or [])}"
+        logger.info(f"Started {launch.app} as pid {pid}, {how}")
+        return self._child
 
-    def _abandon(self, request: _ForkRequest, error: LauncherError) -> None:
-        os.close(request.launch.output_fd)
-        os.close(request.output_fd)
-        if request.log is not None:
-            request.log.close()
-        request.done.set_exception(error)
-
-    def _become_child(self, output_fd: int) -> None:
+    def _become_child(self) -> None:
         # First, so the inherited fds, the event loop selector included, are the child's own before anything runs
-        child.detach(output_fd)
+        child.detach()
         self._loop.set_exception_handler(lambda loop, context: None)
         for signum, handler in self._dispositions.items():
             self._loop.remove_signal_handler(signum)
             signal.signal(signum, signal.SIG_DFL if handler is None else handler)
 
-    async def _stop_children(self, targets: Sequence[Child]) -> list[dict[str, Any]]:
-        return list(await asyncio.gather(*(self._stop(target) for target in targets)))
-
-    async def _stop(self, target: Child) -> dict[str, Any]:
+    async def _stop_child(self) -> dict[str, Any] | None:
+        """Stops the app, if one runs; returns how it ended."""
+        if (target := self._child) is None:
+            return None
         target.stopping = True
-        with suppress(ProcessLookupError):
-            os.kill(target.pid, signal.SIGTERM)
+        _signal_group(target.pid, signal.SIGTERM)
         try:
             await asyncio.wait_for(asyncio.shield(target.exited), self._config.stop_timeout_s)
         except TimeoutError:
             logger.warning(f"{target.app} (pid {target.pid}) did not stop in {self._config.stop_timeout_s} s, killing it")
-            for kill in (os.killpg, os.kill):
-                with suppress(ProcessLookupError, PermissionError):
-                    kill(target.pid, signal.SIGKILL)
+            _signal_group(target.pid, signal.SIGKILL)
             await target.exited
         return {"app": target.app, "pid": target.pid, **_exit_fields(target.exited.result())}
-
-    # The app link
-
-    def _link_app(self, app: str) -> None:
-        """Points the link behind the alias at the app; a restart of the same app finds it in place."""
-        if (link := self._config.app_link) is None:
-            return
-        try:
-            if os.path.islink(link) and os.readlink(link) == app:
-                return
-            pending = f"{link}.{os.getpid()}"
-            with suppress(FileNotFoundError):
-                os.unlink(pending)
-            os.symlink(app, pending)
-            os.replace(pending, link)
-        except OSError as e:
-            logger.warning(f"Cannot point {link} at {app}: {e}")
-
-    def _unlink_app(self) -> None:
-        """Removes the link behind the alias: no app runs."""
-        if self._config.app_link is not None:
-            with suppress(OSError):
-                os.unlink(self._config.app_link)
 
     def _reap(self) -> None:
         while True:
@@ -534,38 +410,31 @@ class Supervisor:
                 return
             if pid == 0:
                 return
-            if (preparation := self._preparations.pop(pid, None)) is not None:
+            if (preparation := self._preparation) is not None and preparation.pid == pid:
+                self._preparation = None
                 self._kill_strays()
-                if not preparation.exited.done():
-                    preparation.exited.set_result(status)
-                continue
-            reaped = next((c for c in self._children.values() if c.pid == pid), None)
-            if reaped is None:
-                continue
-            del self._children[reaped.app]
-            if not self._children and not self._lifecycle.locked():
-                self._unlink_app()
-            # What the app left behind dies with it, as in a container whose main process ends
-            with suppress(ProcessLookupError, PermissionError):
-                os.killpg(pid, signal.SIGKILL)
-            self._kill_strays()
-            fields = _exit_fields(status)
-            how = f"was killed by signal {fields['signal']}" if fields["signal"] is not None else f"exited with code {fields['exit_code']}"
-            logger.info(f"{reaped.app} (pid {pid}) {how}")
-            reaped.exited.set_result(status)
+                preparation.exited.set_result(status)
+            elif (reaped := self._child) is not None and reaped.pid == pid:
+                self._child = None
+                # What the app left behind dies with it, as in a container whose main process ends
+                _signal_group(pid, signal.SIGKILL)
+                self._kill_strays()
+                fields = _exit_fields(status)
+                how = f"was killed by signal {fields['signal']}" if fields["signal"] is not None else f"exited with code {fields['exit_code']}"
+                logger.info(f"{reaped.app} (pid {pid}) {how}")
+                reaped.exited.set_result(status)
 
     def _kill_strays(self) -> None:
-        """Kills what a stopped app or preparation left behind, a helper in a session of its own included.
+        """Kills every process of the container but PID 1 and the supervisor, helpers in sessions of their own included.
 
-        Orphans reparent to the launcher, a subreaper, so every process of an app descends from it as long as it lives: all
-        that descend and belong to no running app or preparation are killed, listed again for the ones forked meanwhile.
+        Only when the supervisor tops a pid namespace of its own: elsewhere the other processes are not the app's.
         """
-        if not os.path.isdir("/proc"):
+        if not self._owns_container:
             return
-        keep = {c.pid for c in self._children.values()} | set(self._preparations)
+        keep = {1, os.getpid(), *(p.pid for p in (self._child, self._preparation) if p is not None)}
         killed: set[int] = set()
         for _ in range(STRAY_SWEEPS):
-            strays = [pid for pid in _descendants(os.getpid()) if not any(_descends_from(pid, kept) for kept in keep)]
+            strays = [pid for pid in _live_pids() if pid not in keep]
             if not strays:
                 break
             for pid in strays:
@@ -575,111 +444,52 @@ class Supervisor:
         if killed:
             logger.info(f"Killed what was left behind: pids {sorted(killed)}")
 
-    # App output
 
-    def _open_log(self, app: str) -> AppLog | None:
-        # A start begins a new log: what the user reads after a refresh is this run only
-        try:
-            return AppLog(app, fresh=True)
-        except OSError as e:
-            logger.warning(f"Cannot write the log of {app}, its output is dropped: {e}")
-            return None
-
-    def _relay_output(self, fd: int, log: AppLog | None) -> None:
-        # One reusable buffer, wiped after each write: no line of an app lingers in the heap the next app is forked from
-        try:
-            size = os.readv(fd, [self._chunk])
-        except BlockingIOError:
-            return
-        except OSError:
-            size = 0
-        if size:
-            if log is not None:
-                try:
-                    log.write(memoryview(self._chunk)[:size])
-                except OSError as e:
-                    logger.warning(f"Cannot write {log.path}: {e}")
-            self._chunk[:size] = bytes(size)
-            return
-        self._loop.remove_reader(fd)
-        os.close(fd)
-        if log is not None:
-            log.close()
-
-
-def _refuse_launched_peer(writer: asyncio.StreamWriter) -> None:
-    """Refuses a client the launcher itself spawned: an app, however far down, must not drive the launcher.
-
-    The daemon and the CLI connect from outside the container's pid namespace, where the kernel reports their pid as 0,
-    and a `docker exec` client descends from outside too. A peer gone before the check is refused: it may have handed the
-    connection down before exiting. macOS reports no peer pid: development only, nothing is refused.
-    """
-    if not hasattr(socket, "SO_PEERCRED"):
-        return
-    sock = writer.get_extra_info("socket")
-    layout = "iII"
-    pid, _, _ = struct.unpack(layout, sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize(layout)))
-    if _descends_from(pid, os.getpid()):
-        logger.warning(f"Request from pid {pid}, a process of a launched app, refused")
-        raise LauncherError(ErrorCode.FORBIDDEN, f"requests from the processes of an app are refused (pid {pid})")
-
-
-def _descends_from(pid: int, ancestor: int, *, vanished: bool = True) -> bool:
-    """Whether the process descends from the ancestor, following the parents in /proc; pid 0 is outside this pid namespace.
-
-    A process gone before the walk reaches it is answered `vanished`: nothing proves it was not one of ours.
-    """
-    while pid > 0 and pid != ancestor:
-        parent = _parent_pid(pid)
-        if parent is None:
-            return vanished
-        pid = parent
-    return pid == ancestor
-
-
-def _descendants(ancestor: int) -> list[int]:
-    """The live processes descending from the ancestor, from /proc; the exited ones only wait for their reaping."""
-    return [pid for pid in _pids() if pid != ancestor and _descends_from(pid, ancestor, vanished=False) and not _exited(pid)]
-
-
-def _pids() -> list[int]:
+def _owns_container() -> bool:
+    """Whether the supervisor tops a pid namespace of its own, as PID 1 or the child of the init docker runs as PID 1."""
     try:
-        return [int(name) for name in os.listdir("/proc") if name.isdigit()]
+        nested = os.stat("/proc/self/ns/pid").st_ino != _HOST_PID_NAMESPACE
+    except OSError:
+        return False
+    return nested and 1 in (os.getpid(), os.getppid())
+
+
+def _signal_group(pid: int, signum: int) -> None:
+    """Signals the process group the child leads, or the child alone when it has not become its leader yet."""
+    for kill in (os.killpg, os.kill):
+        try:
+            kill(pid, signum)
+            return
+        except ProcessLookupError:
+            continue
+        except PermissionError:
+            return
+
+
+def _live_pids() -> list[int]:
+    """The processes started in this pid namespace, from /proc: not the exited ones that only wait for their reaping, nor
+    the ones a parent outside the namespace started, the `docker exec` sessions."""
+    try:
+        pids = [int(name) for name in os.listdir("/proc") if name.isdigit()]
     except OSError:
         return []
+    live: list[int] = []
+    for pid in pids:
+        state, parent = _state(pid)
+        if state not in ("", "Z", "X") and parent != 0:
+            live.append(pid)
+    return live
 
 
-def _parent_pid(pid: int) -> int | None:
-    """The parent of the process, 0 when it is outside this pid namespace, None when the process is gone."""
+def _state(pid: int) -> tuple[str, int]:
+    """The state letter and the parent pid of the process; the state is empty when it is gone."""
     try:
-        return int(_status_field(pid, "PPid"))
-    except ValueError:
-        return None
-
-
-def _exited(pid: int) -> bool:
-    return _status_field(pid, "State").startswith("Z")
-
-
-def _status_field(pid: int, field: str) -> str:
-    """A field of /proc/<pid>/status, empty when the process is gone."""
-    try:
-        with open(f"/proc/{pid}/status", encoding="utf-8") as status:
-            for line in status:
-                if line.startswith(f"{field}:"):
-                    return line.partition(":")[2].strip()
-    except OSError:
-        pass
-    return ""
-
-
-def _adopt_orphans() -> None:
-    """Makes the launcher the parent of every process its apps orphan, as PID 1 of a container is: Linux only."""
-    if sys.platform != "linux":
-        return
-    libc = ctypes.CDLL(None, use_errno=True)
-    if libc.prctl(_PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
-        logger.warning(f"Cannot adopt the orphans of the apps: {os.strerror(ctypes.get_errno())}")
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as stat_file:
+            # The command name may hold spaces and parentheses: the state and the parent follow its last parenthesis
+            state, parent = stat_file.read().rpartition(")")[2].split()[:2]
+            return state, int(parent)
+    except (OSError, ValueError):
+        return "", 0
 
 
 async def _read_request(reader: asyncio.StreamReader) -> Request:
@@ -701,7 +511,7 @@ def _ms_since(started: float) -> float:
 
 
 def _setup_logging() -> None:
-    handler = logging.StreamHandler(sys.stdout)
+    handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s app-launcher: %(message)s"))
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)

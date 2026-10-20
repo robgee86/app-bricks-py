@@ -10,10 +10,8 @@ FROM ${REGISTRY}app-bricks/python-base:${BASE_IMAGE_VERSION}
 ARG BASE_IMAGE_VERSION
 ENV BRICKS_RELEASE_VERSION=${BASE_IMAGE_VERSION}
 
-# The skeleton of every app home, which the launcher mirrors into <app>/.cache/home: the Streamlit theme and the ALSA
-# wrappers only, none of Debian's shell defaults
-RUN rm -rf /etc/skel/.[!.]* /etc/skel/*
-COPY ./streamlit/config.toml /etc/skel/.streamlit/config.toml
+# Copy the Streamlit configuration file with customized settings in home app shared directory
+COPY ./streamlit/config.toml /home/app/.streamlit/config.toml
 
 COPY ./scripts/*.sh /
 # The wheel and the lock it was built from, from the bake context filled by `task build:bricks`
@@ -39,8 +37,8 @@ RUN set -ex; \
         rm -rf /var/lib/apt/lists/* /var/lib/dpkg/*-old /tmp/patch_*.deb; \
     fi; \
     rm -rf /tmp/patches; \
-    # The ALSA dsnoop/dmix wrappers are static: generate them once here, into the skeleton
-    HOME=/etc/skel bash /provision-alsa-devices.sh; \
+    # ALSA dsnoop/dmix wrappers: the file is static, generate it once here instead of at every app start
+    HOME=/home/app bash /provision-alsa-devices.sh; \
     # fix permissions for /home/app
     chown arduino:arduino -R /home/app; \
     chmod 777 -R /home/app; \
@@ -52,13 +50,9 @@ RUN set -ex; \
     python -m compileall /usr/local/bin; \
     python -m compileall /usr/local/lib
 
-# /app names the running app: the launcher points this link at its folder, in place of the base image folder
-RUN rmdir /app && ln -s /home/app/current-app /app
-
 USER arduino
 
-# The launcher runs from the root, a folder nothing writes, not from a home
-WORKDIR /
+WORKDIR /app
 
 ENV HOME=/home/app
 ENV USER=arduino

@@ -6,8 +6,8 @@
 
 OPENCV_DEBUG=0
 
-# A shell ignores signals without a handler when it is PID 1: a stop during the
-# device provisioning or a preparation would wait for the kill timeout.
+# A shell ignores signals without a handler when it is PID 1, as in a container
+# without init: a stop during the device provisioning would wait for the kill timeout.
 trap 'exit 143' TERM INT
 
 # Disable core dumps: inherited by python and any native library it loads.
@@ -19,10 +19,6 @@ fi
 if [ -z "$PYTHONUNBUFFERED" ]; then
   export PYTHONUNBUFFERED=1
 fi
-
-# No user site-packages: the launcher, the apps and their venvs import from the
-# image and the app venv only, never from what a home holds
-export PYTHONNOUSERSITE=1
 
 if [ "${OPENCV_DEBUG:-0}" = "1" ]; then
   export OPENCV_LOG_LEVEL="${OPENCV_LOG_LEVEL:-DEBUG}"
@@ -43,7 +39,7 @@ provision_devices() {
 # the dependencies of the app at APP_DIR
 case "${1:-serve}" in
   serve)
-    # Once for every app the launcher runs
+    # Once per container, before the launcher forks its app
     provision_devices
     exec arduino-app-launcher
     ;;
@@ -68,9 +64,6 @@ DEPS_FAILED=0
 DEPS_INSTALLED=0
 
 export UV_CACHE_DIR="$CACHE_DIR/uv"
-# The installs follow this script and the image environment only, no uv.toml or
-# pyproject.toml found in the app folder or the home steers them
-export UV_NO_CONFIG=1
 
 # Remove core dumps left in the app directory by a previous run, unless they
 # are explicitly wanted
@@ -227,6 +220,6 @@ if [ -d "$BASE_DIR/bricks" ]; then
 else
   PYTHONPYCACHEPREFIX="$PYCHECK_DIR" python -m compileall -q -x '/\._' "$BASE_DIR/python" || PYCHECK_STATUS=$?
 fi
-# The launcher prepares many apps in one container: no leftovers in /tmp
+# The container outlives the app as a warm cache: no leftovers in /tmp
 rm -rf "$PYCHECK_DIR"
 exit "$PYCHECK_STATUS"

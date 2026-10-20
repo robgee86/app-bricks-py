@@ -15,7 +15,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
-from . import appenv, confinement, prepare
+from . import prepare
 
 STREAMLIT_PORT = 7000
 """The port Streamlit serves, the one run.sh always gave it."""
@@ -32,15 +32,10 @@ class Launch:
 
     app: str
     env: Mapping[str, str]
-    """The supervisor environment, HOME set to the app home; the app's own environment comes from its folder."""
-    output_fd: int
+    """The container environment updated by the app one."""
     runner: Runner = Runner.PYTHON
     interpreter: str | None = None
     """The app venv interpreter, set only when the app has dependencies of its own."""
-    ports: tuple[int, ...] = ()
-    """The TCP ports the app may bind."""
-    confine: bool = True
-    """Whether the child confines itself to the app folder with Landlock before running the app."""
 
     @property
     def main_py(self) -> str:
@@ -76,11 +71,9 @@ def _venv_has_packages(app: str) -> bool:
     return False
 
 
-def environment(launch: Launch, own: Mapping[str, str] | None = None) -> dict[str, str]:
-    """Builds the app environment: the launch one, the app's own on top but for HOME, and the run.sh additions."""
-    env = {**launch.env, **(own or {}), "PYTHONUNBUFFERED": "1"}
-    if "HOME" in launch.env:
-        env["HOME"] = launch.env["HOME"]
+def environment(launch: Launch) -> dict[str, str]:
+    """Builds the app environment: the launch one and the run.sh additions."""
+    env = {**launch.env, "PYTHONUNBUFFERED": "1"}
     bricks = os.path.join(launch.app, "bricks")
     if os.path.isdir(bricks):
         env["PYTHONPATH"] = os.pathsep.join(filter(None, [env.get("PYTHONPATH"), bricks]))
@@ -91,17 +84,14 @@ def environment(launch: Launch, own: Mapping[str, str] | None = None) -> dict[st
     return env
 
 
-def detach(output_fd: int) -> None:
-    """Makes the freshly forked process a group leader writing only to its output pipe, first thing after the fork."""
+def detach() -> None:
+    """Makes the freshly forked process a group leader holding only the container stdio, first thing after the fork."""
     os.setsid()
     # Inherited fds are pointed at /dev/null, not closed: the supervisor objects still own their numbers
     devnull = os.open(os.devnull, os.O_RDWR)
     for fd in _open_fds():
-        if fd > 2 and fd not in (output_fd, devnull):
+        if fd > 2 and fd != devnull:
             os.dup2(devnull, fd, inheritable=False)
-    os.dup2(output_fd, 1)
-    os.dup2(output_fd, 2)
-    os.close(output_fd)
     os.close(devnull)
     for stream in (sys.stdout, sys.stderr):
         if isinstance(stream, io.TextIOWrapper):
@@ -115,14 +105,8 @@ def run(launch: Launch) -> int:
         SystemExit: when the app exits through sys.exit(), as it would in its own interpreter.
     """
     reseed()
-    # The policy comes from the launcher's environment, before the app's replaces it
-    policy = confinement.Policy.for_app(launch.app, launch.ports, os.environ) if launch.confine else None
     os.chdir(launch.app)
-    if policy is not None:
-        # Binds this thread and all it creates: the supervisor forks only while it is the sole thread, so the app inherits it whole
-        confinement.apply(policy)
-    # The app's own environment is read confined: whatever is planted in its place leads nowhere out of the app folder
-    env = environment(launch, appenv.read(launch.app))
+    env = environment(launch)
     os.environ.clear()
     os.environ.update(env)
     argv = launch.exec_argv

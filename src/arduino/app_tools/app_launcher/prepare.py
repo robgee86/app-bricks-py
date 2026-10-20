@@ -9,18 +9,17 @@ import glob
 import hashlib
 import logging
 import os
-import sys
 import signal
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 
-from . import folders
-from .applog import CHUNK_BYTES, AppLog
 from .protocol import ErrorCode, LauncherError
 
 logger = logging.getLogger("arduino.app_tools.app_launcher")
 
 STREAMLIT_UI = "arduino:streamlit_ui"
+CHUNK_BYTES = 64 * 1024
+"""How much output is read at once."""
 TAIL_BYTES = 8 * 1024
 TAIL_LINES = 20
 
@@ -95,30 +94,21 @@ def record(app: str, current: str) -> None:
     Raises:
         OSError: when the record cannot be written.
     """
-    name = os.path.basename(_record_path(app))
-    temporary = f"{name}.{os.getpid()}.tmp"
-    folder = folders.open_folder(app, ".cache")
-    try:
-        with os.fdopen(folders.open_file(folder, temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC), "w", encoding="ascii") as f:
-            f.write(f"{current}\n")
-        os.replace(temporary, name, src_dir_fd=folder, dst_dir_fd=folder)
-    finally:
-        os.close(folder)
+    path = _record_path(app)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    temporary = f"{path}.{os.getpid()}.tmp"
+    with open(temporary, "w", encoding="ascii") as f:
+        f.write(f"{current}\n")
+    os.replace(temporary, path)
 
 
-async def run(app: str, env: Mapping[str, str], run_sh: str, timeout_s: float, log: AppLog | None, watch: Watch, confine: bool = True) -> None:
-    """Runs `run.sh prepare` on the app in its own process group, its output appended to the app log.
-
-    The preparation runs app code, the install steps of its dependencies: confined to the app folder like the app itself,
-    through the confinement module as a command, since posix_spawn runs nothing of ours before the exec.
+async def run(app: str, env: Mapping[str, str], run_sh: str, timeout_s: float, watch: Watch) -> None:
+    """Runs `run.sh prepare` on the app in its own process group, its output relayed to the container stdout.
 
     Raises:
         LauncherError: prepare_failed when run.sh cannot start, fails, is stopped or exceeds the timeout.
     """
     argv = [run_sh, "prepare"]
-    if confine:
-        # Isolated: the wrapper imports from the image only, nothing from its working directory, the environment or a user site
-        argv = [sys.executable, "-I", "-m", "arduino.app_tools.app_launcher.confinement", "--app", app, "--", *argv]
     output_fd, input_fd = os.pipe()
     try:
         # posix_spawn, not a subprocess helper: only the supervisor reaper waits for its processes
@@ -142,7 +132,7 @@ async def run(app: str, env: Mapping[str, str], run_sh: str, timeout_s: float, l
     tail = bytearray()
     try:
         async with asyncio.timeout(timeout_s):
-            await _relay(output_fd, log, tail)
+            await _relay(output_fd, tail)
             status = await asyncio.shield(exited)
     except TimeoutError:
         with suppress(ProcessLookupError, PermissionError):
@@ -159,21 +149,25 @@ def _record_path(app: str) -> str:
     return os.path.join(app, ".cache", "prepared.sha")
 
 
-async def _relay(fd: int, log: AppLog | None, tail: bytearray) -> None:
-    # The log stays open: the app writes to it next
+async def _relay(fd: int, tail: bytearray) -> None:
     reader = asyncio.StreamReader()
     transport, _ = await asyncio.get_running_loop().connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), os.fdopen(fd, "rb", buffering=0))
     try:
         while data := await reader.read(CHUNK_BYTES):
             tail += data
             del tail[:-TAIL_BYTES]
-            if log is not None:
-                try:
-                    log.write(data)
-                except OSError as e:
-                    logger.warning(f"Cannot write {log.path}: {e}")
+            _write_stdout(data)
     finally:
         transport.close()
+
+
+def _write_stdout(data: bytes) -> None:
+    view = memoryview(data)
+    try:
+        while view:
+            view = view[os.write(1, view) :]
+    except OSError as e:
+        logger.warning(f"Cannot relay the preparation output: {e}")
 
 
 def _last_lines(tail: bytearray) -> str:
