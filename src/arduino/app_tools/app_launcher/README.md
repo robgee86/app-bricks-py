@@ -12,7 +12,7 @@ arduino-app-launcher [--socket PATH] ping | status | start <app> [--env K=V ...]
 
 ## What runs where
 
-The daemon (arduino-app-cli) creates one container per app, `<project>-main-1`, with docker-init as PID 1 and the supervisor as its only child. The app folder is bind-mounted at `/app`, the working directory, and the per-app runtime folder at `/run/arduino-app-cli`, where the control socket lives. The container publishes no port: the daemon's ingress forwards the public ports of the running app to its container, where the app binds them.
+The daemon (arduino-app-cli) creates one container per app, `<project>-main-1`, with docker-init as PID 1 and the supervisor as its only child. The app folder is bind-mounted at `/app`, the working directory, and the per-app runtime folder at `/run/arduino-app-cli`, where the control socket lives. The container publishes the public ports of the app, the ones its bricks declare and the ones of app.yaml, so Docker binds them on the host while the container runs: new ports mean a new container, and the container of an app whose ports another app's container holds stays stopped until that app starts.
 
 The app shares its uid and the socket folder with the supervisor, so the daemon trusts neither the path nor a reply by itself: it accepts an answer only from the direct child of the container init, the supervisor, and a stop the supervisor does not confirm or complete ends with a restart of the container. The daemon starts the app through the socket, stops it the same way and leaves the container running: every app of the board has its container up from the daemon boot, so a start is a fork. A missing or stopped container is created or started through the Docker API, the cold path, before the start request.
 
