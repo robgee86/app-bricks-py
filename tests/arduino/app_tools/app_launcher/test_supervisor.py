@@ -194,7 +194,9 @@ def test_runs_an_app_until_stopped(launcher):
         "started_at": started["started_at"],
         "stopping": False,
     }
-    assert status["preload"] == {"modules": ["json"], "failed": []}
+    assert status["preload"]["modules"] == ["json"] and status["preload"]["failed"] == []
+    # The preload runs once the launcher is idle
+    wait_until(lambda: launcher.request({"cmd": "status"})["preload"]["loaded"] == ["json"])
     assert set(status) == {"ok", "child", "preload", "version", "uptime_s"}
 
     # The app writes to the container stdout and stderr, as the launcher does
@@ -339,6 +341,18 @@ def test_exits_on_sigterm_stopping_its_app(launcher):
     assert launcher.close() == 0
     assert gone(started["pid"])
     assert not os.path.exists(launcher.socket)
+
+
+def test_a_start_does_not_wait_for_the_preload():
+    launcher = Launcher(preload="slow", extra_modules={"slow.py": "import time\ntime.sleep(30)\n"}).wait_ready()
+    try:
+        app = launcher.app("early")
+        started = launcher.request({"cmd": "start", "app": str(app)})
+        assert started["ok"], started
+        assert launcher.request({"cmd": "status"})["preload"]["loaded"] == []
+        launcher.output(until="hello from __main__")
+    finally:
+        launcher.remove()
 
 
 def test_exits_on_sigterm_during_the_preload():

@@ -2,7 +2,7 @@
 
 A long-lived supervisor that runs inside the container of one Arduino app (`python-apps-base`, `/run.sh serve`, its default). It imports the heavy libraries once, then starts the app as a forked child on request, so a start skips the interpreter startup and the library imports: on a VENTUNO Q a camera app logs "App started" after 1.2 s instead of 3.0 s. The container is the sandbox: one app per container, kept running after the app stops so that its next start is warm.
 
-Run it with `arduino-app-launcher` or `python -m arduino.app_tools.app_launcher`. It stops on SIGTERM or SIGINT, after stopping the app; during the preload it just exits, so a stop is never lost.
+Run it with `arduino-app-launcher` or `python -m arduino.app_tools.app_launcher`. It opens its socket first and preloads the heavy libraries (`APP_LAUNCHER_PRELOAD`, a comma separated list of modules) only when idle, half a second after opening and one module between two turns of its loop: the start a fresh container is brought up for forks at once and the app imports what it needs itself, the next start is warm. It stops on SIGTERM or SIGINT, after stopping the app; during an import it just exits, so a stop is never lost.
 
 With a command, the same executable is a client of the control socket that prints the JSON response (`client.py`, stdlib only, a reference for other clients):
 
@@ -31,7 +31,7 @@ A Unix socket at `APP_LAUNCHER_SOCKET`, mode 0660. One JSON object per line, one
 |---|---|
 | `{"cmd":"start","app":"/app","env":{"K":"V"}}` | `{"ok":true,"pid":N,"started_at":"<iso>","warm":true,"runner":"python","prepared":false,"timings":{"stop_ms":..,"prepare_ms":..,"fork_ms":..}}` |
 | `{"cmd":"stop"}` | `{"ok":true,"stopped":[{"app":..,"pid":..,"exit_code":..,"signal":..}]}` |
-| `{"cmd":"status"}` | `{"ok":true,"child":{"app","pid","runner","warm","started_at","stopping"} or null,"preload":{"modules":[..],"failed":[..]},"version":..,"uptime_s":..}` |
+| `{"cmd":"status"}` | `{"ok":true,"child":{"app","pid","runner","warm","started_at","stopping"} or null,"preload":{"modules":[..],"loaded":[..],"failed":[..]},"version":..,"uptime_s":..}` |
 | `{"cmd":"ping"}` | `{"ok":true}` |
 
 `start` takes the absolute app folder and an optional `env`, an object of strings: the app environment. A start with an app running stops it first, a reload, and reports the time in `timings.stop_ms`; then it prepares the app when needed and forks it. `stop` stops the app, `stopped` holds zero or one entry; an `app` in the request is ignored. Stopping when nothing runs is not an error.
