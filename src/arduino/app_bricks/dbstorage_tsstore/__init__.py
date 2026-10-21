@@ -14,7 +14,7 @@ from influxdb_client.client.write_api import WriteApi
 from influxdb_client.domain.bucket_retention_rules import BucketRetentionRules
 from influxdb_client.domain.write_precision import WritePrecision
 
-from arduino.app_internal.core import get_brick_compose_file, parse_docker_compose_variable
+from arduino.app_internal.core import get_brick_compose_file, parse_docker_compose_variable, resolve_address
 from arduino.app_utils import brick, Logger
 
 logger = Logger("TimeSeriesStore")
@@ -61,7 +61,8 @@ class _InfluxDBHandler:
             retention_days (int, optional): Number of days to retain data in the InfluxDB bucket. Defaults to 7.
         """
         self.name = "dbstorage"
-        self.host = host
+        # The service name, or the container of this app's own database when the runtime names it
+        self.host = resolve_address(host) if host == base_influx_host else host
         self.port = port
         infra = self.load_default_infra()
         if infra is None:

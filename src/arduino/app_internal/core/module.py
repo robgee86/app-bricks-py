@@ -373,12 +373,21 @@ def load_module_supported_variables(file_path: str) -> list[ModuleVariable] | No
 
 
 def resolve_address(host: str) -> str:
-    """Resolve address substituting it in case of local/remote development."""
+    """Resolve the address of a brick service: its own container when the runtime names it, the service name otherwise,
+    substituted in case of local/remote development.
+
+    The runtime sets ARDUINO_SERVICE_HOST_<SERVICE> when the services of several apps share one network, where the
+    service name alone would be ambiguous; the service name is uppercased, every other character an underscore.
+    """
     remote_dev = os.getenv("REMOTE_DEV")
     local_dev = os.getenv("LOCAL_DEV", "false").lower()
     if local_dev == "true":
         return "127.0.0.1"
     elif remote_dev and remote_dev != "":
         return remote_dev
-    else:
-        return host
+    return os.getenv(service_host_variable(host)) or host
+
+
+def service_host_variable(service: str) -> str:
+    """Returns the name of the variable the runtime may set with the host of the service."""
+    return "ARDUINO_SERVICE_HOST_" + re.sub(r"[^A-Z0-9]", "_", service.upper())
