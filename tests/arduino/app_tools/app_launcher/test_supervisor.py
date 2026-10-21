@@ -62,6 +62,7 @@ mkdir -p "$APP_DIR/.cache/.venv/bin"
 ln -sf "{python}" "$APP_DIR/.cache/.venv/bin/python"
 echo prepared >> "$APP_DIR/prepared.marker"
 echo "prepared with GREETING=$GREETING INHERITED=$INHERITED"
+exec "{python}" -m arduino.app_tools.app_launcher record-preparation "$APP_DIR"
 """
 
 # Runs the launcher atop a pid namespace of its own, as in its container; unshare forwards no signal, it only waits
