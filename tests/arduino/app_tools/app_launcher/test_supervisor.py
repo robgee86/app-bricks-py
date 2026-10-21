@@ -74,6 +74,7 @@ mkdir -p "$APP_DIR/.cache/.venv/bin"
 ln -sf "{python}" "$APP_DIR/.cache/.venv/bin/python"
 echo prepared >> "$APP_DIR/prepared.marker"
 echo "prepared at home $HOME with PLANTED=${{PLANTED:-nothing}}"
+exec "{python}" -m arduino.app_tools.app_launcher record-preparation "$APP_DIR"
 """
 
 
@@ -379,7 +380,8 @@ def test_prepares_an_app_with_dependencies_when_they_change(launcher):
     assert (first["ok"], first["prepared"], first["warm"]) == (True, True, False)
     assert first["timings"]["prepare_ms"] > 0
     assert log_of(app, until="hello from").startswith(
-        f"installing {requirements}\nprepared at home {app}/.cache/home with PLANTED=nothing\nhello from __main__ {app}/python/main.py"
+        f"installing {requirements}\nprepared at home {app}/.cache/home with PLANTED=nothing\n"
+        f"Recorded the preparation of {app}\nhello from __main__ {app}/python/main.py"
     )
     assert (app / ".cache" / "prepared.sha").exists()
 

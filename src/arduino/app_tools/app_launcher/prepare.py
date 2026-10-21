@@ -9,9 +9,9 @@ import glob
 import hashlib
 import logging
 import os
-import sys
 import signal
-from collections.abc import Callable, Mapping
+import sys
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 
 from . import folders
@@ -157,6 +157,25 @@ async def run(app: str, env: Mapping[str, str], run_sh: str, timeout_s: float, l
 
 def _record_path(app: str) -> str:
     return os.path.join(app, ".cache", "prepared.sha")
+
+
+def main(argv: Sequence[str]) -> int:
+    """`record <app>`: records the fingerprint of the app dependencies, what `run.sh prepare` ends a success with.
+
+    The record is written by the preparation itself, so that a venv built anywhere, as a release build does, is complete.
+    """
+    match argv:
+        case ["record", app]:
+            current = fingerprint(app)
+            if current is None:
+                print(f"{app} has no dependencies of its own, nothing to record")
+                return 0
+            record(app, current)
+            print(f"Recorded the preparation of {app}")
+            return 0
+        case _:
+            print("usage: record <app>", file=sys.stderr)
+            return 2
 
 
 async def _relay(fd: int, log: AppLog | None, tail: bytearray) -> None:

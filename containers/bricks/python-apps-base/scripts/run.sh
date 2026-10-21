@@ -229,4 +229,8 @@ else
 fi
 # The launcher prepares many apps in one container: no leftovers in /tmp
 rm -rf "$PYCHECK_DIR"
-exit "$PYCHECK_STATUS"
+if [ "$PYCHECK_STATUS" -ne 0 ]; then
+  exit "$PYCHECK_STATUS"
+fi
+# What was prepared, so that the launcher prepares again only when the dependencies change: a release ships it with the venv
+exec arduino-app-launcher record-preparation "$BASE_DIR"

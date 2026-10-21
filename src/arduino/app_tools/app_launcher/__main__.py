@@ -4,14 +4,19 @@
 
 import sys
 
-from arduino.app_tools.app_launcher import client, supervisor
+from arduino.app_tools.app_launcher import client, prepare, supervisor
 
 
 def main() -> int:
-    """Entry point of `arduino-app-launcher`: runs the launcher without arguments, talks to it with a command."""
-    if len(sys.argv) > 1:
-        return client.main(sys.argv[1:])
-    return supervisor.main()
+    """Entry point of `arduino-app-launcher`: runs the launcher without arguments, talks to it with a command; `record-preparation`
+    is for `run.sh prepare`, which ends by recording what it prepared."""
+    match sys.argv[1:]:
+        case []:
+            return supervisor.main()
+        case ["record-preparation", *rest]:
+            return prepare.main(["record", *rest])
+        case argv:
+            return client.main(argv)
 
 
 if __name__ == "__main__":

@@ -70,6 +70,18 @@ def test_installing_a_wheel_keeps_the_fingerprint(tmp_path):
     assert prepare.fingerprint(str(tmp_path)) != before
 
 
+def test_the_record_command_records_the_current_fingerprint(tmp_path, capsys):
+    write(tmp_path / "python" / "requirements.txt", "requests\n")
+    assert prepare.main(["record", str(tmp_path)]) == 0
+    assert prepare.recorded(str(tmp_path)) == prepare.fingerprint(str(tmp_path))
+    assert "Recorded" in capsys.readouterr().out
+
+    (tmp_path / "python" / "requirements.txt").write_text("")
+    assert prepare.main(["record", str(tmp_path)]) == 0
+    assert "nothing to record" in capsys.readouterr().out
+    assert prepare.main(["bogus"]) == 2
+
+
 def test_an_app_is_prepared_until_its_fingerprint_is_recorded_with_a_venv(tmp_path):
     app = str(tmp_path)
     assert prepare.needs_preparation(app, "abc")

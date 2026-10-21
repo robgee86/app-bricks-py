@@ -408,10 +408,8 @@ class Supervisor:
             if log is not None:
                 log.close()
             raise
-        try:
-            prepare.record(app, current)
-        except OSError as e:
-            logger.warning(f"Cannot record the preparation of {app}, the next start prepares it again: {e}")
+        if prepare.recorded(app) != current:
+            logger.warning(f"The preparation of {app} recorded nothing, the next start prepares it again")
         logger.info(f"Prepared {app}")
         return True
 
