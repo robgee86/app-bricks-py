@@ -6,8 +6,8 @@ version: "3"
 # Every task here runs on a developer machine. What runs only in CI lives in Taskfile.ci.yml.
 
 includes:
-  board:
-    taskfile: Taskfile.board.yml
+  buddy:
+    taskfile: Taskfile.buddy.yml
 
 tasks:
   # init: set up the development environment, a .venv per component with the locked dependencies
