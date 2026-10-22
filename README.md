@@ -142,7 +142,7 @@ Behavior that needs real hardware or the real containers runtime is tested on a 
 ```sh
 arduino-test-buddy up                                                             # start the tool's registry and builder, nothing runs before
 task buddy:push                                                                   # wheel and every image from this checkout, pushed to the registry on this machine
-task buddy:run BOARD=<ssh alias> TAG=<branch> DIR=./bt-mytest                    # run a test app until its marker and get the log of this run
+task buddy:run BOARD=<ssh alias> TAG=<branch> APP=host:./bt-mytest               # run a test app until its marker and get the log of this run
 task buddy:examples BOARD=<ssh alias> BRICK=video_objectdetection                # the shipped examples declaring the brick
 task buddy:cleanup BOARD=<ssh alias> TAG=<branch> BRICK=video_objectdetection    # remove what the session left, scoped to the tag and brick
 arduino-test-buddy down                                                           # stop both containers, the data stays

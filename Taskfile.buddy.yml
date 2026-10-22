@@ -20,10 +20,10 @@ tasks:
       - "arduino-test-buddy{{if .TAG}} --tag {{.TAG}}{{end}} push --source .{{if .TARGETS}} --targets {{.TARGETS}}{{end}}"
 
   run:
-    desc: "Run an app or an example until its marker: task buddy:run BOARD=<alias> TAG=<tag> DIR=<folder> | APP=examples:<path> [MARKER=<regex>]"
-    requires: { vars: [BOARD] }
+    desc: "Run an app or an example until its marker: task buddy:run BOARD=<alias> TAG=<tag> APP=host:<folder>|user:<name>|examples:<path> [MARKER=<regex>]"
+    requires: { vars: [BOARD, APP] }
     cmds:
-      - "{{.TOOL}} run{{if .DIR}} --dir {{.DIR}}{{end}}{{if .MARKER}} --marker '{{.MARKER}}'{{end}} {{.APP}}"
+      - "{{.TOOL}} run{{if .MARKER}} --marker '{{.MARKER}}'{{end}} {{.APP}}"
 
   examples:
     desc: "List the shipped examples declaring a brick: task buddy:examples BOARD=<alias> BRICK=<name>"
