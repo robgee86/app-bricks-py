@@ -9,6 +9,7 @@ between two runs of the loop, never inside a callback, so the child never unwind
 """
 
 import asyncio
+import atexit
 import gc
 import importlib
 import importlib.util
@@ -679,4 +680,19 @@ def main() -> int:
         logger.error(f"Invalid configuration: {e}")
         return 2
     launch = Supervisor(config, handover).serve()
-    return 0 if launch is None else child.run(launch)
+    if launch is not None:
+        return child.run(launch)
+    _exit_without_teardown(0)
+
+
+def _exit_without_teardown(code: int) -> NoReturn:
+    """Ends the supervisor as App.run ends an app: the exit handlers run and the streams are flushed, then the process
+    ends at once, skipping the teardown of the preloaded modules, half a second on a board, for memory the kernel reclaims."""
+    try:
+        atexit._run_exitfuncs()  # pyright: ignore[reportPrivateUsage]  # Exit handlers, logging.shutdown() among them
+    except BaseException as e:
+        logger.exception(f"An exit handler failed: {e}")
+    for stream in (sys.stdout, sys.stderr):
+        with suppress(Exception):
+            stream.flush()
+    os._exit(code)
