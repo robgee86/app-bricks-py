@@ -6,8 +6,8 @@ version: "3"
 # Every task here runs on a developer machine. What runs only in CI lives in Taskfile.ci.yml.
 
 includes:
-  board:
-    taskfile: Taskfile.board.yml
+  buddy:
+    taskfile: Taskfile.buddy.yml
 
 vars:
   LICENSE_HEADER_EXCLUDE: '(^|/)(docs|examples-internal|tools)/|\.(md|txt|json|yml|yaml|toml|gitignore|dockerignore|gitmodules|in|ini|eim|lock)$'
