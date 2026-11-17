@@ -6,7 +6,20 @@ import json
 
 import pytest
 
-from arduino.app_tools.app_launcher.protocol import ErrorCode, LauncherError, Mode, Ping, Start, Status, Stop, decode_request, encode, error, ok
+from arduino.app_tools.app_launcher.protocol import (
+    ErrorCode,
+    Events,
+    LauncherError,
+    Mode,
+    Ping,
+    Start,
+    Status,
+    Stop,
+    decode_request,
+    encode,
+    error,
+    ok,
+)
 
 
 def test_decodes_every_request():
@@ -20,6 +33,7 @@ def test_decodes_every_request():
     assert decode_request(b'{"cmd":"stop","app":"/apps/a"}') == Stop(app="/apps/a")
     assert decode_request(b'{"cmd":"status"}') == Status()
     assert decode_request(b'{"cmd":"ping"}') == Ping()
+    assert decode_request(b'{"cmd":"events"}') == Events()
 
 
 @pytest.mark.parametrize(

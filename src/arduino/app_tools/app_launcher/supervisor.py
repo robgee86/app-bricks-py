@@ -34,7 +34,7 @@ from arduino.version import __version__
 from . import child, confinement, home, prepare, protocol
 from .applog import CHUNK_BYTES, AppLog
 from .child import Launch, Runner
-from .protocol import ErrorCode, LauncherError, Mode, Ping, Request, Start, Status, Stop
+from .protocol import ErrorCode, Events, LauncherError, Mode, Ping, Request, Start, Status, Stop
 
 logger = logging.getLogger("arduino.app_tools.app_launcher")
 
@@ -51,6 +51,8 @@ DEFAULT_APP_ALIAS = "/app"
 """The path that names the running app for compatibility: in the image, a link to the link the launcher points at the app."""
 REQUEST_TIMEOUT_S = 5.0
 HANDLED_SIGNALS = (signal.SIGTERM, signal.SIGINT, signal.SIGCHLD)
+MAX_EVENTS_BACKLOG_BYTES = 64 * 1024
+"""How much a subscriber may leave unread before it is dropped: an event is a few hundred bytes."""
 STRAY_SWEEPS = 5
 """How many times a sweep lists and kills what a stopped app left behind, for a leftover forking in between."""
 _PR_SET_CHILD_SUBREAPER = 36
@@ -182,6 +184,7 @@ class Supervisor:
         self._landlock_abi = self._probe_confinement()
         self._preparations: dict[int, _Preparation] = {}
         self._control: asyncio.Server | None = None
+        self._subscribers: set[asyncio.StreamWriter] = set()
         self._fork_request: _ForkRequest | None = None
         self._chunk = bytearray(CHUNK_BYTES)
         self._exiting = False
@@ -281,7 +284,11 @@ class Supervisor:
         try:
             try:
                 _refuse_launched_peer(writer)
-                response = await self._handle(await _read_request(reader))
+                request = await _read_request(reader)
+                if isinstance(request, Events):
+                    await self._serve_events(reader, writer)
+                    return
+                response = await self._handle(request)
             except LauncherError as e:
                 response = protocol.error(e)
             except Exception as e:
@@ -294,7 +301,32 @@ class Supervisor:
         finally:
             writer.close()
 
-    async def _handle(self, request: Request) -> dict[str, Any]:
+    async def _serve_events(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        """Sends the apps that run now, then again at each change, until the subscriber leaves."""
+        self._subscribers.add(writer)
+        try:
+            writer.write(protocol.encode(protocol.ok(**self._apps_state())))
+            # A subscriber sends nothing more: the read ends when it leaves
+            while await reader.read(1024):
+                pass
+        finally:
+            self._subscribers.discard(writer)
+
+    def _publish(self) -> None:
+        """Tells the subscribers the apps that run, which just changed."""
+        # A launcher on its way out takes its apps with it: the end of the stream tells the rest
+        if self._exiting:
+            return
+        event = protocol.encode(protocol.ok(**self._apps_state()))
+        for writer in tuple(self._subscribers):
+            if writer.transport.get_write_buffer_size() > MAX_EVENTS_BACKLOG_BYTES:
+                # Dropped, not left behind: it gets the apps that run again when it subscribes anew
+                self._subscribers.discard(writer)
+                writer.transport.abort()
+            else:
+                writer.write(event)
+
+    async def _handle(self, request: Start | Stop | Status | Ping) -> dict[str, Any]:
         match request:
             case Ping():
                 return protocol.ok()
@@ -319,10 +351,14 @@ class Supervisor:
         if self._exiting:
             raise LauncherError(ErrorCode.BUSY, "the launcher is shutting down")
 
+    def _apps_state(self) -> dict[str, Any]:
+        """The apps that run, each named by its folder: what an event carries."""
+        return {"children": [c.describe() for c in self._children.values()]}
+
     def _status(self) -> dict[str, Any]:
         return {
             "confinement": {"required": self._config.confine, "landlock_abi": self._landlock_abi},
-            "children": [c.describe() for c in self._children.values()],
+            **self._apps_state(),
             "preload": {"modules": list(self._config.preload), "failed": list(self._preload_failed)},
             "version": __version__,
             "uptime_s": round(time.monotonic() - self._started, 3),
@@ -468,6 +504,8 @@ class Supervisor:
         self._children[launched.app] = launched
         how = "warm" if launched.warm else f"as {' '.join(request.launch.exec_argv or [])}"
         logger.info(f"Started {launched.app} as pid {pid}, {how}")
+        # Queued for the next run of the loop: nothing is written between two of its runs
+        self._loop.call_soon(self._publish)
         return launched
 
     def _abandon(self, request: _ForkRequest, error: LauncherError) -> None:
@@ -490,6 +528,7 @@ class Supervisor:
 
     async def _stop(self, target: Child) -> dict[str, Any]:
         target.stopping = True
+        self._publish()
         with suppress(ProcessLookupError):
             os.kill(target.pid, signal.SIGTERM)
         try:
@@ -552,6 +591,7 @@ class Supervisor:
             how = f"was killed by signal {fields['signal']}" if fields["signal"] is not None else f"exited with code {fields['exit_code']}"
             logger.info(f"{reaped.app} (pid {pid}) {how}")
             reaped.exited.set_result(status)
+            self._publish()
 
     def _kill_strays(self) -> None:
         """Kills what a stopped app or preparation left behind, a helper in a session of its own included.

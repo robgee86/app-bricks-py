@@ -17,7 +17,7 @@ arduino-app-launcher [--socket PATH] ping | status | start <app> [--env K=V ...]
 
 ## Control socket
 
-A Unix socket at `APP_LAUNCHER_SOCKET`, mode 0660. One JSON object per line, one request per connection, then the response and the connection closes. Lifecycle requests (`start`, `stop`) run one at a time; `status` and `ping` answer immediately.
+A Unix socket at `APP_LAUNCHER_SOCKET`, mode 0660. One JSON object per line, one request per connection, then the response and the connection closes; `events` is answered by a stream. Lifecycle requests (`start`, `stop`) run one at a time; `status` and `ping` answer immediately.
 
 A request from a process the launcher itself spawned, an app or anything an app left behind, is refused with `forbidden`: the peer's pid, which the kernel attaches to the connection, descends from the launcher. The daemon and the CLI connect from outside the container's pid namespace, where that pid reads 0, and a `docker exec` client, the health check, descends from outside too. A peer gone before the check runs is refused as well: the pid is the one that connected, and a process of an app could hand the connection down and exit. On macOS, where no peer pid exists, nothing is refused.
 
@@ -27,6 +27,9 @@ A request from a process the launcher itself spawned, an app or anything an app 
 | `{"cmd":"stop"}` or `{"cmd":"stop","app":"<abs folder>"}` | `{"ok":true,"stopped":[{"app":..,"pid":..,"exit_code":..,"signal":..}]}` |
 | `{"cmd":"status"}` | `{"ok":true,"confinement":{"required":true,"landlock_abi":N},"children":[{"app","pid","state","started_at","runner","warm"}],"preload":{"modules":[..],"failed":[..]},"version":..,"uptime_s":..}` |
 | `{"cmd":"ping"}` | `{"ok":true}` |
+| `{"cmd":"events"}` | `{"ok":true,"children":[..]}` now, as `status` lists them, then one such line each time an app starts, is being stopped or ends |
+
+An `events` connection stays open until the client closes it or the launcher exits. The apps the launcher stops on its way out raise no event: the end of the stream tells it.
 
 `start` with `replace` stops every running app first, prepares the new one when needed, then forks it; its `ports` are the TCP ports the app may bind, the ones it declares, none when absent, see [Confinement](#confinement). It carries no environment: a request with `env` is refused as `bad_request`, the app reads its own from its folder, see [The app environment](#the-app-environment). `mode` `add` is refused with `unsupported`: one app at a time for now. Stopping an app that is not running is not an error. A stop sends SIGTERM, waits the grace period, then SIGKILLs the app's process group; once the app exits, whatever it left behind is killed too, a helper in a session of its own included, as in a container whose main process ends: the launcher is the parent every orphan falls back to, as PID 1 of a container is, so every process of an app descends from it, and all that descend and belong to no running app or preparation are killed, listed again for the ones forked meanwhile. The same follows the end of a preparation.
 

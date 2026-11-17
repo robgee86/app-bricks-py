@@ -156,6 +156,26 @@ def spawn(root, preload="json", confinement=None, home=None):
     return process
 
 
+class Subscription:
+    """An events connection to the launcher, read one event at a time."""
+
+    def __init__(self, socket_path, timeout_s=10):
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.settimeout(timeout_s)
+        self.sock.connect(socket_path)
+        self.sock.sendall(b'{"cmd":"events"}\n')
+        self.lines = self.sock.makefile("rb")
+
+    def next(self):
+        """The next event, None once the launcher closed the connection."""
+        line = self.lines.readline()
+        return json.loads(line) if line else None
+
+    def close(self):
+        self.lines.close()
+        self.sock.close()
+
+
 class Launcher:
     def __init__(self, root: Path, confinement=None):
         self.root = root
@@ -175,6 +195,9 @@ class Launcher:
 
     def request(self, message):
         return client.request(message, self.socket, timeout_s=10)
+
+    def subscribe(self):
+        return Subscription(self.socket)
 
     def app(self, name, app_yaml="", env=None):
         """An app folder, with the environment file the daemon would write when `env` is given."""
@@ -274,6 +297,70 @@ def test_the_alias_goes_away_when_the_last_app_dies_on_its_own(launcher):
     os.kill(started["pid"], signal.SIGKILL)
     assert wait_until(lambda: launcher.request({"cmd": "status"})["children"] == [])
     assert wait_until(lambda: not launcher.app_link.is_symlink())
+
+
+def test_a_subscriber_gets_the_apps_that_run_now_and_at_each_change(launcher):
+    events = launcher.subscribe()
+    try:
+        assert events.next() == {"ok": True, "children": []}, "the apps that run now come first"
+
+        app = launcher.app("watched")
+        started = launcher.request({"cmd": "start", "app": str(app)})
+        running = events.next()
+        assert running == {"ok": True, "children": launcher.request({"cmd": "status"})["children"]}
+        assert [(child["app"], child["pid"], child["state"]) for child in running["children"]] == [(str(app), started["pid"], "running")]
+
+        os.kill(started["pid"], signal.SIGKILL)
+        assert events.next() == {"ok": True, "children": []}, "an app ending on its own is told"
+
+        restarted = launcher.request({"cmd": "start", "app": str(app)})
+        assert events.next()["children"][0]["pid"] == restarted["pid"]
+        assert launcher.request({"cmd": "stop"})["stopped"][0]["pid"] == restarted["pid"]
+        stopping = events.next()
+        assert [(child["pid"], child["state"]) for child in stopping["children"]] == [(restarted["pid"], "stopping")]
+        assert events.next() == {"ok": True, "children": []}
+    finally:
+        events.close()
+
+
+def test_subscribers_come_and_go_without_holding_the_launcher(launcher):
+    early, late = launcher.subscribe(), None
+    try:
+        assert early.next()["ok"]
+        early.close()
+        late = launcher.subscribe()
+        assert late.next()["children"] == []
+
+        started = launcher.request({"cmd": "start", "app": str(launcher.app("unwatched"))})
+        assert started["ok"], "a start forks with a subscriber connected and after one left"
+        assert late.next()["children"][0]["pid"] == started["pid"]
+        os.kill(started["pid"], signal.SIGKILL)
+        assert late.next()["children"] == []
+    finally:
+        early.close()
+        if late is not None:
+            late.close()
+
+
+def test_the_events_end_with_the_launcher_whose_last_stop_raises_none():
+    root = short_folder()
+    launcher = Launcher(root)
+    try:
+        events = launcher.subscribe()
+        assert events.next()["children"] == []
+        started = launcher.request({"cmd": "start", "app": str(launcher.app("going"))})
+        assert events.next()["children"][0]["pid"] == started["pid"]
+
+        # The app holds none of the launcher connections: the stream ends although the app got them at the fork
+        assert launcher.close() == 0
+        assert events.next() is None, "the end of the stream tells that the launcher took its apps with it"
+        events.close()
+    finally:
+        if launcher.process.poll() is None:
+            launcher.close()
+        shutil.rmtree(root)
+        shutil.rmtree(launcher.apps)
+        shutil.rmtree(launcher.home)
 
 
 def test_a_link_planted_as_the_log_carries_no_write(launcher):
