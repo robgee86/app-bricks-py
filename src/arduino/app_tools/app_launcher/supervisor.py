@@ -13,6 +13,7 @@ import atexit
 import gc
 import importlib
 import importlib.util
+import json
 import logging
 import os
 import signal
@@ -32,7 +33,7 @@ from arduino.version import __version__
 
 from . import child, prepare, protocol
 from .child import Launch, Runner
-from .protocol import ErrorCode, LauncherError, Ping, Request, Start, Status, Stop
+from .protocol import ErrorCode, Events, LauncherError, Ping, Request, Start, Status, Stop
 
 logger = logging.getLogger("arduino.app_tools.app_launcher")
 
@@ -47,6 +48,8 @@ DEFAULT_PRELOAD = ",".join((
 DEFAULT_RUN_SH = "/run.sh"
 REQUEST_TIMEOUT_S = 5.0
 HANDLED_SIGNALS = (signal.SIGTERM, signal.SIGINT, signal.SIGCHLD)
+MAX_EVENTS_BACKLOG_BYTES = 64 * 1024
+"""How much a subscriber may leave unread before it is dropped: an event is a few hundred bytes."""
 STRAY_SWEEPS = 5
 PRELOAD_GRACE_S = 0.5
 """How long the preload waits once the socket is open: the start a fresh container is brought up for comes first."""
@@ -56,7 +59,7 @@ _HOST_PID_NAMESPACE = 0xEFFFFFFC
 VENV_PRELOAD = ("streamlit.web.bootstrap",)
 """What a launcher running in an app venv preloads on top, when the venv has it: the Streamlit of the app."""
 LISTEN_FD_VAR, PENDING_FD_VAR, PENDING_REQUEST_VAR = "APP_LAUNCHER_LISTEN_FD", "APP_LAUNCHER_PENDING_FD", "APP_LAUNCHER_PENDING_REQUEST"
-PENDING_PREPARED_VAR = "APP_LAUNCHER_PENDING_PREPARED"
+PENDING_PREPARED_VAR, PENDING_LAST_VAR = "APP_LAUNCHER_PENDING_PREPARED", "APP_LAUNCHER_PENDING_LAST"
 
 SignalHandler = Callable[[int, FrameType | None], Any] | int | signal.Handlers | None
 
@@ -96,18 +99,21 @@ class Handover:
     pending_request: bytes | None = None
     pending_prepared: bool = False
     """Whether the launcher prepared the app of the pending start before it became the venv interpreter."""
+    last: dict[str, Any] | None = None
+    """How the previous app ended: the pending start stopped it, which the new interpreter still tells."""
 
     @classmethod
     def take_from(cls, env: MutableMapping[str, str]) -> "Handover":
         """Reads and removes the handover from the environment, so that no app inherits it."""
-        listen_fd, pending_fd, pending, prepared = (
-            env.pop(name, None) for name in (LISTEN_FD_VAR, PENDING_FD_VAR, PENDING_REQUEST_VAR, PENDING_PREPARED_VAR)
+        listen_fd, pending_fd, pending, prepared, last = (
+            env.pop(name, None) for name in (LISTEN_FD_VAR, PENDING_FD_VAR, PENDING_REQUEST_VAR, PENDING_PREPARED_VAR, PENDING_LAST_VAR)
         )
         return cls(
             listen_fd=None if listen_fd is None else int(listen_fd),
             pending_fd=None if pending_fd is None else int(pending_fd),
             pending_request=None if pending is None else pending.encode(),
             pending_prepared=prepared == "1",
+            last=None if last is None else json.loads(last),
         )
 
     @property
@@ -177,8 +183,10 @@ class Supervisor:
         self._loop = asyncio.new_event_loop()
         self._lifecycle = asyncio.Lock()
         self._child: Child | None = None
+        self._last: dict[str, Any] | None = self._handover.last
         self._preparation: _Preparation | None = None
         self._control: asyncio.Server | None = None
+        self._subscribers: set[asyncio.StreamWriter] = set()
         self._fork_request: _ForkRequest | None = None
         self._owns_container = _owns_container()
         self._exiting = False
@@ -316,14 +324,19 @@ class Supervisor:
         except (OSError, TimeoutError):
             writer.close()
             return
+        if isinstance(request, Events):
+            await self._serve_events(reader, writer)
+            return
         await self._respond(writer, request)
 
     async def _serve_pending(self, fd: int, line: bytes) -> None:
         """Answers the start the launcher was serving when it became the venv interpreter, on the connection it took along."""
         _, writer = await asyncio.open_unix_connection(sock=socket.socket(fileno=fd))
-        await self._respond(writer, protocol.decode_request(line), prepared_before=self._handover.pending_prepared)
+        request = protocol.decode_request(line)
+        assert isinstance(request, Start)
+        await self._respond(writer, request, prepared_before=self._handover.pending_prepared)
 
-    async def _respond(self, writer: asyncio.StreamWriter, request: Request, prepared_before: bool = False) -> None:
+    async def _respond(self, writer: asyncio.StreamWriter, request: Start | Stop | Status | Ping, prepared_before: bool = False) -> None:
         try:
             response = await self._handle(request, prepared_before)
         except _BecomeVenv as e:
@@ -344,6 +357,34 @@ class Supervisor:
         finally:
             writer.close()
 
+    async def _serve_events(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        """Sends the state of the app as it is now, then at each change, until the subscriber leaves."""
+        self._subscribers.add(writer)
+        try:
+            writer.write(protocol.encode(protocol.ok(**self._app_state())))
+            # A subscriber sends nothing more: the read ends when it leaves
+            while await reader.read(1024):
+                pass
+        except OSError:
+            pass
+        finally:
+            self._subscribers.discard(writer)
+            writer.close()
+
+    def _publish(self) -> None:
+        """Tells the subscribers the state of the app, which just changed."""
+        # A supervisor on its way out takes its container with it: the state of the container tells the rest
+        if self._exiting:
+            return
+        event = protocol.encode(protocol.ok(**self._app_state()))
+        for writer in tuple(self._subscribers):
+            if writer.transport.get_write_buffer_size() > MAX_EVENTS_BACKLOG_BYTES:
+                # Dropped, not left behind: it gets the state of the app again when it subscribes anew
+                self._subscribers.discard(writer)
+                writer.transport.abort()
+            else:
+                writer.write(event)
+
     def _become_venv(self, become: _BecomeVenv, writer: asyncio.StreamWriter) -> NoReturn:
         """Replaces this process with the launcher under the venv interpreter of the app, the socket and the pending start
         along: the apps forked from now on inherit the packages of the venv. The pid stays, nothing of the loop survives."""
@@ -359,13 +400,14 @@ class Supervisor:
             PENDING_FD_VAR: str(pending_fd),
             PENDING_REQUEST_VAR: protocol.encode({"cmd": "start", "app": request.app, "env": dict(request.env)}).decode(),
             PENDING_PREPARED_VAR: "1" if become.prepared else "0",
+            PENDING_LAST_VAR: json.dumps(self._last),
         }
         logger.info(f"Becoming the venv interpreter {interpreter} of {request.app}")
         sys.stdout.flush()
         sys.stderr.flush()
         os.execve(interpreter, [interpreter, "-c", _VENV_BOOTSTRAP % _package_root()], env)
 
-    async def _handle(self, request: Request, prepared_before: bool = False) -> dict[str, Any]:
+    async def _handle(self, request: Start | Stop | Status | Ping, prepared_before: bool = False) -> dict[str, Any]:
         match request:
             case Ping():
                 return protocol.ok()
@@ -387,9 +429,13 @@ class Supervisor:
         if self._exiting:
             raise LauncherError(ErrorCode.BUSY, "the launcher is shutting down")
 
+    def _app_state(self) -> dict[str, Any]:
+        """The app that runs and how the previous one ended, what an event carries."""
+        return {"child": None if self._child is None else self._child.describe(), "last": self._last}
+
     def _status(self) -> dict[str, Any]:
         return {
-            "child": None if self._child is None else self._child.describe(),
+            **self._app_state(),
             "venv": sys.prefix if _in_a_venv() else None,
             "preload": {"modules": list(self._config.preload), "loaded": list(self._preloaded), "failed": list(self._preload_failed)},
             "version": __version__,
@@ -504,6 +550,8 @@ class Supervisor:
         )
         how = "warm" if self._child.warm else f"as {' '.join(launch.exec_argv or [])}"
         logger.info(f"Started {launch.app} as pid {pid}, {how}")
+        # Queued for the next run of the loop: nothing is written between two of its runs
+        self._loop.call_soon(self._publish)
         return self._child
 
     def _become_child(self) -> None:
@@ -519,6 +567,7 @@ class Supervisor:
         if (target := self._child) is None:
             return None
         target.stopping = True
+        self._publish()
         _signal_group(target.pid, signal.SIGTERM)
         try:
             await asyncio.wait_for(asyncio.shield(target.exited), self._config.stop_timeout_s)
@@ -548,7 +597,10 @@ class Supervisor:
                 fields = _exit_fields(status)
                 how = f"was killed by signal {fields['signal']}" if fields["signal"] is not None else f"exited with code {fields['exit_code']}"
                 logger.info(f"{reaped.app} (pid {pid}) {how}")
+                # Stopped tells the supervisor ended it on request, by a stop or by the start that replaces it
+                self._last = {"app": reaped.app, "pid": pid, **fields, "stopped": reaped.stopping}
                 reaped.exited.set_result(status)
+                self._publish()
 
     def _kill_strays(self) -> None:
         """Kills every process of the container but PID 1 and the supervisor, helpers in sessions of their own included.

@@ -25,14 +25,17 @@ The app shares its uid and the socket folder with the supervisor, so the daemon 
 
 ## Control socket
 
-A Unix socket at `APP_LAUNCHER_SOCKET`, mode 0660. One JSON object per line, one request per connection, then the response and the connection closes. Lifecycle requests (`start`, `stop`) run one at a time; `status` and `ping` answer immediately.
+A Unix socket at `APP_LAUNCHER_SOCKET`, mode 0660. One JSON object per line, one request per connection, then the response and the connection closes; `events` is answered by a stream. Lifecycle requests (`start`, `stop`) run one at a time; `status` and `ping` answer immediately.
 
 | Request | Response |
 |---|---|
 | `{"cmd":"start","app":"/app","env":{"K":"V"}}` | `{"ok":true,"pid":N,"started_at":"<iso>","warm":true,"runner":"python","prepared":false,"timings":{"stop_ms":..,"prepare_ms":..,"fork_ms":..}}` |
 | `{"cmd":"stop"}` | `{"ok":true,"stopped":[{"app":..,"pid":..,"exit_code":..,"signal":..}]}` |
-| `{"cmd":"status"}` | `{"ok":true,"child":{"app","pid","runner","warm","started_at","stopping"} or null,"preload":{"modules":[..],"loaded":[..],"failed":[..]},"version":..,"uptime_s":..}` |
+| `{"cmd":"status"}` | `{"ok":true,"child":{"app","pid","runner","warm","started_at","stopping"} or null,"last":{"app","pid","exit_code","signal","stopped"} or null,"preload":{"modules":[..],"loaded":[..],"failed":[..]},"version":..,"uptime_s":..}` |
 | `{"cmd":"ping"}` | `{"ok":true}` |
+| `{"cmd":"events"}` | `{"ok":true,"child":{..} or null,"last":{..} or null}` now, then one such line each time the app starts, is being stopped or ends |
+
+`last` is how the previous app process ended; its `stopped` tells the supervisor ended it on request, by a stop or by the start that replaces it, and not on its own. An `events` connection stays open until the client closes it or the supervisor goes: it ends when the supervisor exits, the app it stops on its way out raises no event, and when the supervisor becomes the venv interpreter of its app, after which the client subscribes again and is still told how the previous app ended.
 
 `start` takes the absolute app folder and an optional `env`, an object of strings: the app environment. A start with an app running stops it first, a reload, and reports the time in `timings.stop_ms`; then it prepares the app when needed and forks it. `stop` stops the app, `stopped` holds zero or one entry; an `app` in the request is ignored. Stopping when nothing runs is not an error.
 
