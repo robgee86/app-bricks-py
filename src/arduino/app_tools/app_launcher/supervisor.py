@@ -46,6 +46,8 @@ DEFAULT_PRELOAD = ",".join((
     "arduino.app_peripherals.speaker",
     "arduino.app_bricks.web_ui",
 ))
+PRELOAD_GRACE_S = 0.5
+"""How long the preload waits once the socket is open: the start a fresh launcher is brought up for comes first."""
 DEFAULT_RUN_SH = "/run.sh"
 DEFAULT_APP_ALIAS = "/app"
 """The path that names the running app for compatibility: in the image, a link to the link the launcher points at the app."""
@@ -149,35 +151,21 @@ class _ForkRequest:
     done: asyncio.Future[Child] = field(repr=False)
 
 
-def preload(modules: Sequence[str]) -> list[str]:
-    """Imports the modules one by one and returns those that failed."""
-    failed: list[str] = []
-    for name in modules:
-        started = time.monotonic()
-        try:
-            importlib.import_module(name)
-        except Exception as e:
-            logger.warning(f"Preload of {name} failed: {e!r}")
-            failed.append(name)
-            continue
-        logger.info(f"Preloaded {name} in {_ms_since(started)} ms")
-    return failed
-
-
 class Supervisor:
     """Owns the control socket and the table of running apps."""
 
-    def __init__(self, config: Config, preload_failed: Sequence[str], dispositions: Mapping[int, SignalHandler]) -> None:
+    def __init__(self, config: Config, dispositions: Mapping[int, SignalHandler]) -> None:
         """Prepares the supervisor.
 
         Args:
             config (Config): The settings.
-            preload_failed (Sequence[str]): The preloaded modules that failed to import, reported by status.
             dispositions (Mapping[int, SignalHandler]): The handlers of HANDLED_SIGNALS a fresh `python main.py` has.
         """
         self._config = config
         self._dispositions = dict(dispositions)
-        self._preload_failed = tuple(preload_failed)
+        self._pending_preload = list(config.preload)
+        self._preloaded: list[str] = []
+        self._preload_failed: list[str] = []
         self._loop = asyncio.new_event_loop()
         self._lifecycle = asyncio.Lock()
         self._children: dict[str, Child] = {}
@@ -203,6 +191,9 @@ class Supervisor:
         _adopt_orphans()
         self._loop.run_until_complete(self._open())
         self._log_ready()
+        # The socket is served first: a start arriving before the preload is done forks between two imports, the app
+        # imports what it needs itself, and the remaining modules are imported afterwards, one between two turns of the loop
+        self._loop.call_later(PRELOAD_GRACE_S, self._preload_step)
         while True:
             self._loop.run_forever()
             request, self._fork_request = self._fork_request, None
@@ -258,11 +249,37 @@ class Supervisor:
 
     def _log_ready(self) -> None:
         threads = [thread.name for thread in threading.enumerate()]
-        if len(threads) > 1:
-            logger.warning(f"Threads alive after the preload, starting apps will be refused: {threads}")
         # Native threads are invisible to threading: only Linux lists them all
         native = f", {len(os.listdir('/proc/self/task'))} OS threads" if os.path.isdir("/proc/self/task") else ""
         logger.info(f"Ready on {self._config.socket_path}, {len(threads)} Python threads{native}")
+
+    def _preload_step(self) -> None:
+        """Imports the next module of the preload, keeping any signal handler it installs for the apps, not for the loop."""
+        if self._exiting or not self._pending_preload:
+            if not self._pending_preload and (threads := [thread.name for thread in threading.enumerate()])[1:]:
+                logger.warning(f"Threads alive after the preload, starting apps will be refused: {threads}")
+            return
+        name = self._pending_preload.pop(0)
+        loop_handlers = {signum: signal.getsignal(signum) for signum in HANDLED_SIGNALS}
+        if not self._children:
+            # Nothing to stop and nothing of the loop runs during an import: a stop arriving then exits at once.
+            # With an app running the stop waits for the import, then the loop stops the app as usual
+            for signum in (signal.SIGTERM, signal.SIGINT):
+                signal.signal(signum, _exit_now)
+        started = time.monotonic()
+        try:
+            importlib.import_module(name)
+        except Exception as e:
+            logger.warning(f"Preload of {name} failed: {e!r}")
+            self._preload_failed.append(name)
+        else:
+            self._preloaded.append(name)
+            logger.info(f"Preloaded {name} in {_ms_since(started)} ms")
+        for signum, handler in loop_handlers.items():
+            if (installed := signal.getsignal(signum)) not in (handler, _exit_now):
+                self._dispositions[signum] = installed
+            signal.signal(signum, handler)
+        self._loop.call_soon(self._preload_step)
 
     def _request_exit(self, signame: str) -> None:
         if self._exiting:
@@ -359,7 +376,7 @@ class Supervisor:
         return {
             "confinement": {"required": self._config.confine, "landlock_abi": self._landlock_abi},
             **self._apps_state(),
-            "preload": {"modules": list(self._config.preload), "failed": list(self._preload_failed)},
+            "preload": {"modules": list(self._config.preload), "loaded": list(self._preloaded), "failed": list(self._preload_failed)},
             "version": __version__,
             "uptime_s": round(time.monotonic() - self._started, 3),
         }
@@ -747,28 +764,23 @@ def _setup_logging() -> None:
     logger.propagate = False
 
 
-def _exit_during_preload(signum: int, frame: FrameType | None) -> NoReturn:
+def _exit_now(signum: int, frame: FrameType | None) -> NoReturn:
     raise SystemExit(0)
-
-
-def _app_dispositions(before_preload: Mapping[int, SignalHandler]) -> dict[int, SignalHandler]:
-    current = {signum: signal.getsignal(signum) for signum in HANDLED_SIGNALS}
-    return {signum: before_preload.get(signum) if handler is _exit_during_preload else handler for signum, handler in current.items()}
 
 
 def main() -> int:
     """Runs the supervisor; in a forked child it returns the app's exit code."""
-    # Nothing to stop before the event loop takes over: a stop during the preload just exits, even as PID 1
-    before_preload: dict[int, SignalHandler] = {signum: signal.signal(signum, _exit_during_preload) for signum in (signal.SIGTERM, signal.SIGINT)}
+    dispositions: dict[int, SignalHandler] = {signum: signal.getsignal(signum) for signum in HANDLED_SIGNALS}
+    # Nothing to stop before the event loop takes over: a stop just exits, even as PID 1
+    for signum in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(signum, _exit_now)
     _setup_logging()
     try:
         config = Config.from_env(os.environ)
     except ValueError as e:
         logger.error(f"Invalid configuration: {e}")
         return 2
-    failed = preload(config.preload)
-    supervisor = Supervisor(config, failed, _app_dispositions(before_preload))
-    launch = supervisor.serve()
+    launch = Supervisor(config, dispositions).serve()
     if launch is not None:
         return child.run(launch)
     _exit_without_teardown(0)

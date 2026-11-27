@@ -177,14 +177,14 @@ class Subscription:
 
 
 class Launcher:
-    def __init__(self, root: Path, confinement=None):
+    def __init__(self, root: Path, confinement=None, preload="json"):
         self.root = root
         self.socket = str(root / "launcher.sock")
         self.app_link = root / "current-app"
         # The apps and the launcher home live outside the folders a confined app may reach, /tmp among them
         self.apps = short_folder("apps", "/var/tmp")
         self.home = short_folder("home", "/var/tmp")
-        self.process = spawn(root, confinement=confinement, home=self.home)
+        self.process = spawn(root, preload=preload, confinement=confinement, home=self.home)
         wait_until(self.answers, details=lambda: (root / "launcher.log").read_text())
 
     def answers(self):
@@ -254,7 +254,7 @@ def test_runs_an_app_until_stopped(launcher):
     status = launcher.request({"cmd": "status"})
     child = {"app": str(app), "pid": started["pid"], "state": "running", "started_at": started["started_at"], "runner": "python", "warm": True}
     assert status["children"] == [child]
-    assert status["preload"] == {"modules": ["json"], "failed": []}
+    assert status["preload"]["modules"] == ["json"] and status["preload"]["failed"] == []
 
     assert log_of(app) == f"hello from __main__ {app}/python/main.py hi yes\n"
     assert os.readlink(launcher.app_link) == str(app)
@@ -551,10 +551,44 @@ def test_exits_on_sigterm_stopping_its_apps(launcher):
     assert not os.path.exists(launcher.socket)
 
 
+def slow_module(root, seconds):
+    (root / "modules").mkdir()
+    (root / "modules" / "slow.py").write_text(f"import time\nprint('importing', flush=True)\ntime.sleep({seconds})\n")
+
+
+def test_a_start_does_not_wait_for_the_preload():
+    root = short_folder()
+    slow_module(root, 30)
+    launcher = Launcher(root, preload="slow")
+    try:
+        app = launcher.app("early")
+        started = launcher.request({"cmd": "start", "app": str(app)})
+        assert started["ok"], started
+        assert launcher.request({"cmd": "status"})["preload"]["loaded"] == []
+        assert log_of(app).startswith("hello from __main__")
+    finally:
+        launcher.process.kill()
+        os.killpg(started["pid"], signal.SIGKILL)
+        for folder in (root, launcher.apps, launcher.home):
+            shutil.rmtree(folder)
+
+
+def test_a_stop_during_the_preload_stops_the_running_app():
+    root = short_folder()
+    slow_module(root, 0.5)
+    launcher = Launcher(root, preload="slow")
+    started = launcher.request({"cmd": "start", "app": str(launcher.app("running"))})
+    wait_until(lambda: "importing" in (root / "launcher.log").read_text())
+    assert launcher.close() == 0
+    assert gone(started["pid"])
+    assert "Preloaded slow" in (root / "launcher.log").read_text(), "the stop waited for the import"
+    for folder in (root, launcher.apps, launcher.home):
+        shutil.rmtree(folder)
+
+
 def test_exits_on_sigterm_during_the_preload():
     root = short_folder()
-    (root / "modules").mkdir()
-    (root / "modules" / "slow.py").write_text("import time\nprint('importing', flush=True)\ntime.sleep(30)\n")
+    slow_module(root, 30)
     process = spawn(root, preload="slow")
     wait_until(lambda: "importing" in (root / "launcher.log").read_text())
     process.send_signal(signal.SIGTERM)

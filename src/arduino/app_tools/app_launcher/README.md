@@ -1,8 +1,10 @@
 # arduino-app-launcher
 
-A long-lived supervisor that runs inside one shared `python-apps-base` container (`/run.sh serve`, its default), the only way apps run. It imports the heavy libraries once, then starts each Arduino app as a forked child on request, so a start skips the interpreter startup and the library imports: on a VENTUNO Q a camera app logs "App started" after 1.2 s instead of 3.0 s.
+A long-lived supervisor that runs inside one shared `python-apps-base` container (`/run.sh serve`, its default), the only way apps run. It imports the heavy libraries once and starts each Arduino app as a forked child on request, so a start skips the interpreter startup and the library imports: on a VENTUNO Q a camera app logs "App started" after 1.2 s instead of 3.0 s.
 
-Run it with `arduino-app-launcher` or `python -m arduino.app_tools.app_launcher`. It stops on SIGTERM or SIGINT, after stopping its apps; during the preload it just exits, so a stop is never lost even as PID 1.
+Run it with `arduino-app-launcher` or `python -m arduino.app_tools.app_launcher`. It opens its socket first and preloads the heavy libraries (`APP_LAUNCHER_PRELOAD`) half a second later, one module between two turns of its loop: the start a fresh launcher is brought up for forks at once and the app imports what it needs itself, the next start is warm. A request arriving while a module is imported waits for that import.
+
+It stops on SIGTERM or SIGINT, after stopping its apps. A stop arriving while a module is imported exits at once when no app runs, so it is never lost even as PID 1; with an app running it waits for that import, then stops the app as usual.
 
 With a command, the same executable is a client of the control socket that prints the JSON response (`client.py`, stdlib only, a reference for other clients):
 
@@ -25,7 +27,7 @@ A request from a process the launcher itself spawned, an app or anything an app 
 |---|---|
 | `{"cmd":"start","app":"<abs folder>","mode":"replace","ports":[7000]}` | `{"ok":true,"pid":N,"started_at":"<iso>","warm":true,"runner":"python","confined":true,"prepared":false,"timings":{"stop_ms":..,"prepare_ms":..,"fork_ms":..}}` |
 | `{"cmd":"stop"}` or `{"cmd":"stop","app":"<abs folder>"}` | `{"ok":true,"stopped":[{"app":..,"pid":..,"exit_code":..,"signal":..}]}` |
-| `{"cmd":"status"}` | `{"ok":true,"confinement":{"required":true,"landlock_abi":N},"children":[{"app","pid","state","started_at","runner","warm"}],"preload":{"modules":[..],"failed":[..]},"version":..,"uptime_s":..}` |
+| `{"cmd":"status"}` | `{"ok":true,"confinement":{"required":true,"landlock_abi":N},"children":[{"app","pid","state","started_at","runner","warm"}],"preload":{"modules":[..],"loaded":[..],"failed":[..]},"version":..,"uptime_s":..}` |
 | `{"cmd":"ping"}` | `{"ok":true}` |
 | `{"cmd":"events"}` | `{"ok":true,"children":[..]}` now, as `status` lists them, then one such line each time an app starts, is being stopped or ends |
 
@@ -39,7 +41,7 @@ Errors are `{"ok":false,"error":{"code":..,"message":..}}` with `code` one of `b
 
 | Variable | Default | |
 |---|---|---|
-| `APP_LAUNCHER_PRELOAD` | `arduino.app_utils,arduino.app_peripherals.camera,arduino.app_peripherals.microphone,arduino.app_peripherals.speaker,arduino.app_bricks.web_ui` | Modules imported at startup, one by one; a failing one is logged and reported by `status` |
+| `APP_LAUNCHER_PRELOAD` | `arduino.app_utils,arduino.app_peripherals.camera,arduino.app_peripherals.microphone,arduino.app_peripherals.speaker,arduino.app_bricks.web_ui` | Modules imported once the socket is open, one by one; a failing one is logged and reported by `status` |
 | `APP_LAUNCHER_SOCKET` | `/run/arduino-app-cli/app-launcher.sock` | Control socket; a stale one is replaced |
 | `APP_LAUNCHER_STOP_TIMEOUT_S` | `5` | Grace period between SIGTERM and SIGKILL, the CLI's container stop timeout |
 | `APP_LAUNCHER_RUN_SH` | `/run.sh` | The entrypoint whose `prepare` mode installs the app dependencies |
